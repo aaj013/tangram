@@ -1,6 +1,6 @@
 (function(){
     var url_hash = getValuesFromUrl();
-    var map_start_location = url_hash ? url_hash.slice(0, 3) : [16, 40.70531887544228, -74.00976419448853];
+    var map_start_location = url_hash ? url_hash.slice(0, 3) : [7, 10.833, 76.27];
 
     /*** URL parsing ***/
     // URL hash pattern #[zoom]/[lat]/[lng]

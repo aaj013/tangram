@@ -1,5 +1,5 @@
 global:
-    api_key: '' # put your nextzen API key here
+    api_key: 'dnyGiKFdQV6AAMJA-v0Wnw' # put your nextzen API key here
     language: en # optional ISO 2-char code
     language_text_source: |
         function() {
@@ -20,7 +20,7 @@ cameras:
     perspective:
         type: perspective
         vanishing_point: [0, -250px] # relative to center of screen, in pixels
-        active: true
+        active: false
 
     isometric:
         type: isometric
@@ -29,7 +29,7 @@ cameras:
 
     flat:
         type: flat
-        active: false
+        active: true
 
 scene:
     background:
@@ -95,7 +95,7 @@ styles:
 sources:
     tilezen:
         type: MVT
-        url: https://tile.nextzen.org/tilezen/vector/v1/512/all/{z}/{x}/{y}.mvt
+        url: https://tile.nextzen.org/tilezen/vector/v1/512/all/{z}/{x}/{y}.mvt?api_key=dnyGiKFdQV6AAMJA-v0Wnw
         # type: TopoJSON
         # url: https://tile.nextzen.org/tilezen/vector/v1/512/all/{z}/{x}/{y}.topojson
         tile_size: 512

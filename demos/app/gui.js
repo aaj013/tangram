@@ -156,18 +156,12 @@
         var langs = {
             '(default)': null,
             'English': 'en',
-            'Russian': 'ru',
-            'Japanese': 'ja',
-            'German': 'de',
-            'French': 'fr',
-            'Arabic': 'ar',
-            'Hindi': 'hi',
-            'Spanish': 'es'
+            'Malayalam': 'ml'
         };
 
         // only add if scene supports language
         if (scene.config.global.language !== undefined || scene.config.global.ux_language !== undefined) {
-            gui.language = 'en';
+            gui.language = 'ml';
             scene.config.global.language = gui.language;
             scene.config.global.ux_language = gui.language;
             gui.add(gui, 'language', langs).onChange(function(value) {
