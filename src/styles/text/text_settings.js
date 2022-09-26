@@ -1,5 +1,4 @@
 import Utils from '../../utils/utils';
-import Geo from '../../utils/geo';
 import StyleParser from '../style_parser';
 
 export default TextSettings;
@@ -16,6 +15,11 @@ const TextSettings = {
             settings.fill,
             settings.stroke,
             settings.stroke_width,
+            settings.underline_width,
+            settings.background_color,
+            settings.background_width,
+            settings.background_stroke_color,
+            settings.background_stroke_width,
             settings.transform,
             settings.text_wrap,
             settings.max_lines,
@@ -26,28 +30,64 @@ const TextSettings = {
 
     defaults: {
         style: 'normal',
-        weight: null,
+        weight: 'normal',
         size: '12px',
         px_size: 12,
         family: 'Helvetica',
-        fill: 'white',
+        fill: [1, 1, 1, 1],
         text_wrap: 15,
         max_lines: 5,
-        align: 'center',
-        stroke: null,
-        stroke_width: 0
+        align: 'center'
     },
 
-    compute (feature, draw, context) {
-        let style = {};
+    compute (draw, context) {
+        const style = {};
 
         draw.font = draw.font || this.defaults;
+
+        style.supersample = draw.supersample_text ? 1.5 : 1; // optionally render text at 150% to improve clarity
 
         // LineString labels can articulate while point labels cannot. Needed for future texture coordinate calculations.
         style.can_articulate = draw.can_articulate;
 
-        // Use fill if specified, or default
-        style.fill = (draw.font.fill && Utils.toCSSColor(StyleParser.evalCachedColorProperty(draw.font.fill, context))) || this.defaults.fill;
+        // Text fill
+        style.fill = StyleParser.evalCachedColorPropertyWithAlpha(draw.font.fill, draw.font.alpha, context);
+        style.fill = Utils.toCSSColor(style.fill); // convert to CSS for Canvas
+
+        // Text stroke
+        if (draw.font.stroke && draw.font.stroke.color) {
+            style.stroke = StyleParser.evalCachedColorPropertyWithAlpha(draw.font.stroke.color, draw.font.stroke.alpha, context);
+            style.stroke = Utils.toCSSColor(style.stroke); // convert to CSS for Canvas
+            style.stroke_width = StyleParser.evalCachedProperty(draw.font.stroke.width, context);
+        }
+
+        // Text underline
+        if (draw.font.underline === true && !style.can_articulate) {
+            style.underline_width = 1.5 * style.supersample;
+        }
+
+        // Background box
+        if (draw.font.background && !style.can_articulate) { // supported for point labels only
+            // Background fill
+            style.background_color = StyleParser.evalCachedColorPropertyWithAlpha(draw.font.background.color, draw.font.background.alpha, context);
+            style.background_color = Utils.toCSSColor(style.background_color); // convert to CSS for Canvas
+            if (style.background_color) {
+                style.background_width = StyleParser.evalCachedProperty(draw.font.background.width, context);
+            }
+
+            // Background stroke
+            style.background_stroke_color =
+                draw.font.background.stroke &&
+                draw.font.background.stroke.color &&
+            StyleParser.evalCachedColorPropertyWithAlpha(draw.font.background.stroke.color, draw.font.background.stroke.alpha, context);
+            if (style.background_stroke_color) {
+                style.background_stroke_color = Utils.toCSSColor(style.background_stroke_color); // convert to CSS for Canvas
+
+                // default background stroke to 1px when stroke color but no stroke width specified
+                style.background_stroke_width = draw.font.background.stroke.width != null ?
+                    StyleParser.evalCachedProperty(draw.font.background.stroke.width, context) : 1;
+            }
+        }
 
         // Font properties are modeled after CSS names:
         // - family: Helvetica, Futura, etc.
@@ -55,8 +95,13 @@ const TextSettings = {
         // - style: normal, italic, oblique
         // - weight: normal, bold, etc.
         // - transform: capitalize, uppercase, lowercase
-        style.style = draw.font.style || this.defaults.style;
-        style.weight = draw.font.weight || this.defaults.weight;
+
+        // clamp weight to 1-1000 (see https://drafts.csswg.org/css-fonts-4/#valdef-font-weight-number)
+        style.weight = StyleParser.evalCachedProperty(draw.font.weight, context) || this.defaults.weight;
+        if (typeof style.weight === 'number') {
+            style.weight = Math.min(Math.max(style.weight, 1), 1000);
+        }
+
         if (draw.font.family) {
             style.family = draw.font.family;
             if (style.family !== this.defaults.family) {
@@ -67,17 +112,11 @@ const TextSettings = {
             style.family = this.defaults.family;
         }
 
+        style.style = draw.font.style || this.defaults.style;
         style.transform = draw.font.transform;
 
         // calculated pixel size
-        style.supersample = draw.supersample_text ? 1.5 : 1; // optionally render text at 150% to improve clarity
         style.px_size = StyleParser.evalCachedProperty(draw.font.px_size, context) * style.supersample;
-
-        // Use stroke if specified
-        if (draw.font.stroke && draw.font.stroke.color) {
-            style.stroke = Utils.toCSSColor(StyleParser.evalCachedColorProperty(draw.font.stroke.color, context) || this.defaults.stroke);
-            style.stroke_width = StyleParser.evalCachedProperty(draw.font.stroke.width, context) || this.defaults.stroke_width;
-        }
 
         style.font_css = this.fontCSS(style);
 
@@ -85,7 +124,7 @@ const TextSettings = {
         // Not a font properties, but affect atlas of unique text textures
         let text_wrap = draw.text_wrap; // use explicitly set value
 
-        if (text_wrap == null && Geo.geometryType(feature.geometry.type) !== 'line') {
+        if (text_wrap == null && !style.can_articulate) {
             // point labels (for point and polygon features) have word wrap on w/default max length,
             // line labels default off
             text_wrap = true;

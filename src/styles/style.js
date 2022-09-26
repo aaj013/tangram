@@ -2,6 +2,7 @@
 
 import StyleParser from './style_parser';
 import FeatureSelection from '../selection/selection';
+import gl from '../gl/constants'; // import GL constants since workers can't access GL context
 import ShaderProgram from '../gl/shader_program';
 import VBOMesh from '../gl/vbo_mesh';
 import Texture from '../gl/texture';
@@ -12,6 +13,7 @@ import log from '../utils/log';
 import mergeObjects from '../utils/merge';
 import Thread from '../utils/thread';
 import WorkerBroker from '../utils/worker_broker';
+import makeWireframeForTriangleElementData from '../builders/wireframe';
 import debugSettings from '../utils/debug_settings';
 
 import selection_fragment_source from '../selection/selection_fragment.glsl';
@@ -24,8 +26,8 @@ export var Style = {
         this.setGeneration(generation);
         this.styles = styles;                       // styles for scene
         this.sources = sources;                     // data sources for scene
-        this.defines = (this.hasOwnProperty('defines') && this.defines) || {}; // #defines to be injected into the shaders
-        this.shaders = (this.hasOwnProperty('shaders') && this.shaders) || {}; // shader customization (uniforms, defines, blocks, etc.)
+        this.defines = (Object.prototype.hasOwnProperty.call(this, 'defines') && this.defines) || {}; // #defines to be injected into the shaders
+        this.shaders = (Object.prototype.hasOwnProperty.call(this, 'shaders') && this.shaders) || {}; // shader customization (uniforms, defines, blocks, etc.)
         this.introspection = introspection || false;
         this.selection = this.selection || this.introspection || false;   // flag indicating if this style supports feature selection
         this.compile_setup = false;                 // one-time setup steps for program compilation
@@ -35,6 +37,9 @@ export var Style = {
         this.vertex_template = [];                  // shared single-vertex template, filled out by each style
         this.tile_data = {};
         this.stencil_proxy_tiles = true;            // applied to proxy tiles w/non-opaque blend mode to avoid compounding alpha
+
+        this.variants = {}; // mesh variants by variant key
+        this.vertex_layouts = {}; // vertex layouts by variant key
 
         // Default world coords to wrap every 100,000 meters, can turn off by setting this to 'false'
         this.defines.TANGRAM_WORLD_POSITION_WRAP = 100000;
@@ -72,6 +77,9 @@ export var Style = {
 
         // Setup raster samplers if needed
         this.setupRasters();
+
+        // Setup shader definitions for custom attributes
+        this.setupCustomAttributes();
 
         this.initialized = true;
     },
@@ -274,6 +282,19 @@ export var Style = {
                 return; // skip feature
             }
 
+            // Custom attributes
+            if (this.shaders.attributes) {
+                style.attributes = style.attributes || {};
+                for (const aname in this.shaders.attributes) {
+                    style.attributes[aname] = StyleParser.evalCachedProperty(
+                        draw.attributes && draw.attributes[aname], context);
+                    // set attribute value to zero for null/undefined/non-numeric values
+                    if (typeof style.attributes[aname] !== 'number') {
+                        style.attributes[aname] = 0;
+                    }
+                }
+            }
+
             // Feature selection (only if feature is marked as interactive, and style supports it)
             if (this.selection) {
                 style.interactive = StyleParser.evalProperty(draw.interactive, context);
@@ -328,6 +349,16 @@ export var Style = {
             if (!draw) {
                 return;
             }
+
+            // Custom attributes
+            if (this.shaders.attributes) {
+                draw.attributes = draw.attributes || {};
+                for (const aname in this.shaders.attributes) {
+                    draw.attributes[aname] = StyleParser.createPropertyCache(
+                        draw.attributes[aname] != null ? draw.attributes[aname] : 0);
+                }
+            }
+
             draw.preprocessed = true;
         }
         return draw;
@@ -378,6 +409,14 @@ export var Style = {
 
     makeMesh (vertex_data, vertex_elements, options = {}) {
         let vertex_layout = this.vertexLayoutForMeshVariant(options.variant);
+
+        if (debugSettings.wireframe) {
+            // In wireframe debug mode, transform mesh into lines
+            vertex_elements = makeWireframeForTriangleElementData(vertex_elements);
+            return new VBOMesh(this.gl, vertex_data, vertex_elements, vertex_layout,
+                { ...options, draw_mode: this.gl.LINES });
+        }
+
         return new VBOMesh(this.gl, vertex_data, vertex_elements, vertex_layout, options);
     },
 
@@ -402,6 +441,7 @@ export var Style = {
             catch (e) {
                 log('error', `Style: error compiling program for style '${this.name}' (program key '${key}')`,
                     this, e.stack, e.type, e.shader_errors);
+                throw e; // re-throw so users can be notified via event subscriptions
             }
         }
         return program;
@@ -683,6 +723,60 @@ export var Style = {
         }));
     },
 
+    // Setup shader definitions for custom attributes
+    setupCustomAttributes() {
+        if (this.shaders.attributes) {
+            for (const [aname, attrib] of Object.entries(this.shaders.attributes)) {
+                // alias each custom attribute to the internal attribute name in vertex shader,
+                // and internal varying name in fragment shader (if varying is enabled)
+                if (attrib.type === 'float') {
+                    if (attrib.varying !== false) {
+                        this.addShaderBlock('attributes', `
+                            #ifdef TANGRAM_VERTEX_SHADER
+                                attribute float a_${aname};
+                                varying float v_${aname};
+                                #define ${aname} a_${aname}
+                            #else
+                                varying float v_${aname};
+                                #define ${aname} v_${aname}
+                            #endif
+                        `);
+                        this.addShaderBlock('setup', `#ifdef TANGRAM_VERTEX_SHADER\nv_${aname} = a_${aname};\n#endif`);
+                    }
+                    else {
+                        this.addShaderBlock('attributes', `
+                            #ifdef TANGRAM_VERTEX_SHADER
+                                attribute float a_${aname};
+                                #define ${aname} a_${aname}
+                            #endif
+                        `);
+                    }
+                }
+            }
+        }
+    },
+
+    // Add custom attributes to a list of attributes for initializing a vertex layout
+    addCustomAttributesToAttributeList(attribs) {
+        if (this.shaders.attributes) {
+            for (const [aname, attrib] of Object.entries(this.shaders.attributes)) {
+                if (attrib.type === 'float') {
+                    attribs.push({ name: `a_${aname}`, size: 1, type: gl.FLOAT, normalized: false });
+                }
+            }
+        }
+        return attribs;
+    },
+
+    // Add current feature values for custom attributes to vertex template
+    addCustomAttributesToVertexTemplate(draw, index) {
+        if (this.shaders.attributes) {
+            for (let aname in this.shaders.attributes) {
+                this.vertex_template[index++] = draw.attributes[aname] != null ? draw.attributes[aname] : 0;
+            }
+        }
+    },
+
     // Setup any GL state for rendering
     setup () {
         this.setUniforms();
@@ -696,7 +790,7 @@ export var Style = {
             return;
         }
 
-        program.setUniforms(this.shaders && this.shaders.uniforms, true); // reset texture unit to 0
+        program.setUniforms(this.shaders?.uniforms, true); // reset texture unit to 0
     },
 
     // Render state settings by blend mode

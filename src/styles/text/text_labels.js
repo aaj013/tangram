@@ -36,7 +36,7 @@ export const TextLabels = {
         }
 
         // Compute text style and layout settings for this feature label
-        let text_settings = TextSettings.compute(feature, draw, context);
+        let text_settings = TextSettings.compute(draw, context);
         let text_settings_key = TextSettings.key(text_settings);
 
         // first label in tile, or with this style?
@@ -276,16 +276,37 @@ export const TextLabels = {
             return;
         }
 
+        // Font weight
+        draw.font.weight = StyleParser.createPropertyCache(draw.font.weight);
+
         // Colors
-        draw.font.fill = StyleParser.createPropertyCache(draw.font.fill);
+        draw.font.fill = StyleParser.createPropertyCache(draw.font.fill || TextSettings.defaults.fill);
+        draw.font.alpha = StyleParser.createPropertyCache(draw.font.alpha);
+
         if (draw.font.stroke) {
             draw.font.stroke.color = StyleParser.createPropertyCache(draw.font.stroke.color);
+            draw.font.stroke.alpha = StyleParser.createPropertyCache(draw.font.stroke.alpha);
+        }
+
+        if (draw.font.background) {
+            draw.font.background.color = StyleParser.createPropertyCache(draw.font.background.color);
+            draw.font.background.alpha = StyleParser.createPropertyCache(draw.font.background.alpha);
+            draw.font.background.width = StyleParser.createPropertyCache(draw.font.background.width, StyleParser.parsePositiveNumber);
+            if (draw.font.background.stroke) {
+                draw.font.background.stroke.color = StyleParser.createPropertyCache(draw.font.background.stroke.color);
+                draw.font.background.stroke.alpha = StyleParser.createPropertyCache(draw.font.background.stroke.alpha);
+            }
         }
 
         // Convert font and text stroke sizes
-        draw.font.px_size = StyleParser.createPropertyCache(draw.font.size || TextSettings.defaults.size, TextCanvas.fontPixelSize);
+        draw.font.px_size = StyleParser.createPropertyCache(draw.font.size || TextSettings.defaults.size, TextCanvas.fontPixelSize, TextCanvas.fontPixelSize);
+
         if (draw.font.stroke && draw.font.stroke.width != null) {
             draw.font.stroke.width = StyleParser.createPropertyCache(draw.font.stroke.width, StyleParser.parsePositiveNumber);
+        }
+
+        if (draw.font.background && draw.font.background.stroke && draw.font.background.stroke.width != null) {
+            draw.font.background.stroke.width = StyleParser.createPropertyCache(draw.font.background.stroke.width, StyleParser.parsePositiveNumber);
         }
 
         // Offset (2d array)

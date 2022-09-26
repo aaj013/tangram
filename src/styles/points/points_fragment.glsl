@@ -30,6 +30,7 @@ varying float v_alpha_factor;
 
 #define TANGRAM_NORMAL vec3(0., 0., 1.)
 
+#pragma tangram: attributes
 #pragma tangram: camera
 #pragma tangram: material
 #pragma tangram: lighting
@@ -106,6 +107,16 @@ void main (void) {
         if (color.a < TANGRAM_ALPHA_TEST) {
             discard;
         }
+    #endif
+
+    // Make points more visible in wireframe debug mode
+    #ifdef TANGRAM_WIREFRAME
+        color = vec4(vec3(0.5), 1.); // use gray outline for textured points
+        #ifdef TANGRAM_HAS_SHADER_POINTS
+            if (u_point_type == TANGRAM_POINT_TYPE_SHADER) {
+                color = vec4(v_color.rgb, 1.); // use original vertex color outline for shader points
+            }
+        #endif
     #endif
 
     gl_FragColor = color;

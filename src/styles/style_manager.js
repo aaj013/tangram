@@ -166,10 +166,10 @@ export class StyleManager {
         style.raster = sources.map(x => x.raster).filter(x => x != null).pop();
         style.dash = sources.map(x => x.dash).filter(x => x != null).pop();
         style.dash_background_color = sources.map(x => x.dash_background_color).filter(x => x != null).pop();
-        if (sources.some(x => x.hasOwnProperty('blend') && x.blend)) {
+        if (sources.some(x => Object.prototype.hasOwnProperty.call(x, 'blend') && x.blend)) {
             // only mix blend if explicitly set, otherwise let base style choose blending mode
             // hasOwnProperty check gives preference to base style prototype
-            style.blend = sources.map(x => x.hasOwnProperty('blend') && x.blend).filter(x => x).pop();
+            style.blend = sources.map(x => Object.prototype.hasOwnProperty.call(x, 'blend') && x.blend).filter(x => x).pop();
         }
         style.blend_order = sources.map(x => x.blend_order).filter(x => x != null).pop();
 
@@ -194,6 +194,9 @@ export class StyleManager {
 
         // Defines
         shaders.defines = Object.assign({}, ...shader_merges.map(x => x.defines).filter(x => x));
+
+        // Attributes
+        shaders.attributes = Object.assign({}, ...shader_merges.map(x => x.attributes).filter(x => x));
 
         // Uniforms
         shaders.uniforms = {};  // uniforms for this style, both explicitly defined, and mixed from other styles
@@ -338,11 +341,25 @@ export class StyleManager {
     }
 
     // Called to create and initialize styles
-    build (styles) {
+    build (styles_defs) {
+        const styles = { ...styles_defs }; // copy to avoid modifying underlying object
+
         // Un-register existing styles from cross-thread communication
         if (this.styles) {
             Object.values(this.styles)
                 .forEach(s => WorkerBroker.removeTarget(s.main_thread_target));
+        }
+
+        // Add default blend/base style pairs as needed
+        const blends = ['opaque', 'add', 'multiply', 'overlay', 'inlay', 'translucent'];
+        const bases = ['polygons', 'lines', 'points', 'text', 'raster'];
+        for (const blend of blends) {
+            for (const base of bases) {
+                const style = blend + '_' + base;
+                if (styles[style] == null) {
+                    styles[style] = { base, blend };
+                }
+            }
         }
 
         // Sort styles by dependency, then build them

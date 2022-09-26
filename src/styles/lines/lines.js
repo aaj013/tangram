@@ -18,9 +18,6 @@ import polygons_fs from '../polygons/polygons_fragment.glsl';
 
 export const Lines = Object.create(Style);
 
-Lines.variants = {}; // mesh variants by variant key
-Lines.vertex_layouts = {}; // vertex layouts by variant key
-
 const DASH_SCALE = 20; // adjustment factor for UV scale to for line dash patterns w/fractional pixel width
 
 Object.assign(Lines, {
@@ -175,6 +172,8 @@ Object.assign(Lines, {
             return;
         }
 
+        style.alpha = StyleParser.evalCachedProperty(draw.alpha, context); // optional alpha override
+
         style.variant = draw.variant; // pre-calculated mesh variant
 
         // height defaults to feature height, but extrude style can dynamically adjust height by returning a number or array (instead of a boolean)
@@ -234,13 +233,15 @@ Object.assign(Lines, {
                 style.outline.offset_precalc = style.offset;
                 style.outline.offset_scale_precalc = style.offset_scale;
 
-                // Inherited properties
                 style.outline.color = draw.outline.color;
+                style.outline.alpha = draw.outline.alpha;
                 style.outline.interactive = draw.outline.interactive;
                 style.outline.cap = draw.outline.cap;
                 style.outline.join = draw.outline.join;
                 style.outline.miter_limit = draw.outline.miter_limit;
                 style.outline.texcoords = draw.outline.texcoords;
+                style.outline.extrude = draw.outline.extrude;
+                style.outline.z = draw.outline.z;
                 style.outline.style = draw.outline.style;
                 style.outline.variant = draw.outline.variant;
 
@@ -273,6 +274,7 @@ Object.assign(Lines, {
 
     _preprocess (draw) {
         draw.color = StyleParser.createColorPropertyCache(draw.color);
+        draw.alpha = StyleParser.createPropertyCache(draw.alpha);
         draw.width = StyleParser.createPropertyCache(draw.width, StyleParser.parseUnits);
         if (draw.width && draw.width.type !== StyleParser.CACHE_TYPE.STATIC) {
             draw.next_width = StyleParser.createPropertyCache(draw.width, StyleParser.parseUnits);
@@ -295,6 +297,7 @@ Object.assign(Lines, {
             draw.outline.is_outline = true; // mark as outline (so mesh variant can be adjusted for render order, etc.)
             draw.outline.style = draw.outline.style || this.name;
             draw.outline.color = StyleParser.createColorPropertyCache(draw.outline.color);
+            draw.outline.alpha = StyleParser.createPropertyCache(draw.outline.alpha);
             draw.outline.width = StyleParser.createPropertyCache(draw.outline.width, StyleParser.parseUnits);
             draw.outline.next_width = StyleParser.createPropertyCache(draw.outline.width, StyleParser.parseUnits); // width re-computed for next zoom
 
@@ -302,9 +305,13 @@ Object.assign(Lines, {
             draw.outline.cap = draw.outline.cap || draw.cap;
             draw.outline.join = draw.outline.join || draw.join;
             draw.outline.miter_limit = (draw.outline.miter_limit != null) ? draw.outline.miter_limit : draw.miter_limit;
-            draw.outline.offset = draw.offset; // always apply inline offset to outline
 
-            // outline inhertits dash pattern, but NOT explicit texture
+            // always apply inline values for offset and extrusion/height to outline
+            draw.outline.offset = draw.offset;
+            draw.outline.extrude = draw.extrude;
+            draw.outline.z = draw.z;
+
+            // outline inherits dash pattern, but NOT explicit texture
             let outline_style = this.styles[draw.outline.style];
             if (outline_style) {
                 draw.outline.dash = (draw.outline.dash !== undefined ? draw.outline.dash : outline_style.dash);
@@ -337,7 +344,7 @@ Object.assign(Lines, {
                     draw.outline.blend_order = draw.blend_order;
                 }
 
-                this.computeVariant(draw.outline, outline_style);
+                outline_style.computeVariant(draw.outline);
             }
             else {
                 log({ level: 'warn', once: true }, `Layer group '${draw.layers.join(', ')}': ` +
@@ -390,6 +397,7 @@ Object.assign(Lines, {
 
                     if (variant.dash) {
                         uniforms.u_v_scale_adjust = Geo.tile_scale * DASH_SCALE;
+                        uniforms.u_has_dash = (variant.dash_background_color != null ? 1 : 0);
                         uniforms.u_dash_background_color = variant.dash_background_color || [0, 0, 0, 0];
                     }
 
@@ -425,12 +433,12 @@ Object.assign(Lines, {
     },
 
     // Calculate and store mesh variant (unique by draw group but not feature)
-    computeVariant (draw, style = this) {
+    computeVariant (draw) {
         // Factors that determine a unique mesh rendering variant
         let key = (draw.offset ? 1 : 0); // whether feature has a line offset
         key += '/' + draw.texcoords; // whether feature has texture UVs
         key += '/' + (draw.interactive ? 1 : 0); // whether feature has interactivity
-        key += '/' + (draw.extrude || draw.z ? 1 : 0); // whether feature has a z coordinate
+        key += '/' + ((draw.extrude || draw.z) ? 1 : 0); // whether feature has a z coordinate
         key += '/' + draw.is_outline; // whether this is an outline of a line feature
 
         if (draw.dash_key) { // whether feature has a line dash pattern
@@ -444,15 +452,15 @@ Object.assign(Lines, {
             key += draw.texture_merged;
         }
 
-        const blend_order = style.getBlendOrderForDraw(draw);
+        const blend_order = this.getBlendOrderForDraw(draw);
         key += '/' + blend_order;
 
         // Create unique key
         key = hashString(key);
         draw.variant = key;
 
-        if (Lines.variants[key] == null) {
-            Lines.variants[key] = {
+        if (this.variants[key] == null) {
+            this.variants[key] = {
                 key,
                 blend_order,
                 mesh_order: (draw.is_outline ? 0 : 1), // outlines should be drawn first, so inline is on top
@@ -471,7 +479,7 @@ Object.assign(Lines, {
     // Override
     // Create or return desired vertex layout permutation based on flags
     vertexLayoutForMeshVariant (variant) {
-        if (Lines.vertex_layouts[variant.key] == null) {
+        if (this.vertex_layouts[variant.key] == null) {
             // Attributes for this mesh variant
             // Optional attributes have placeholder values assigned with `static` parameter
             const attribs = [
@@ -484,14 +492,15 @@ Object.assign(Lines, {
                 { name: 'a_selection_color', size: 4, type: gl.UNSIGNED_BYTE, normalized: true, static: (variant.selection ? null : [0, 0, 0, 0]) }
             ];
 
-            Lines.vertex_layouts[variant.key] = new VertexLayout(attribs);
+            this.addCustomAttributesToAttributeList(attribs);
+            this.vertex_layouts[variant.key] = new VertexLayout(attribs);
         }
-        return Lines.vertex_layouts[variant.key];
+        return this.vertex_layouts[variant.key];
     },
 
     // Override
     meshVariantTypeForDraw (draw) {
-        return Lines.variants[draw.variant]; // return pre-calculated mesh variant
+        return this.variants[draw.variant]; // return pre-calculated mesh variant
     },
 
     /**
@@ -536,7 +545,7 @@ Object.assign(Lines, {
         this.vertex_template[i++] = style.color[0] * 255;
         this.vertex_template[i++] = style.color[1] * 255;
         this.vertex_template[i++] = style.color[2] * 255;
-        this.vertex_template[i++] = style.color[3] * 255;
+        this.vertex_template[i++] = (style.alpha != null ? style.alpha : style.color[3]) * 255;
 
         // a_selection_color.rgba - selection color
         if (mesh.variant.selection) {
@@ -546,6 +555,7 @@ Object.assign(Lines, {
             this.vertex_template[i++] = style.selection_color[3] * 255;
         }
 
+        this.addCustomAttributesToVertexTemplate(style, i);
         return this.vertex_template;
     },
 

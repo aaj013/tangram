@@ -67,7 +67,7 @@ function _extends() {
   return _extends.apply(this, arguments);
 }
 
-var version = "0.19.0";
+var version = "0.21.1";
 
 var version$1 = 'v' + version;
 
@@ -126,11 +126,7 @@ function setupMainThread() {
   // Returns:
   //   - a promise that will be fulfilled if the worker method returns a value (could be immediately, or async)
   //
-  WorkerBroker.postMessage = function (worker, method) {
-    for (var _len = arguments.length, message = new Array(_len > 2 ? _len - 2 : 0), _key = 2; _key < _len; _key++) {
-      message[_key - 2] = arguments[_key];
-    }
-
+  WorkerBroker.postMessage = function (worker, method, ...message) {
     // If more than one worker specified, post to multiple
     if (Array.isArray(worker)) {
       return Promise.all(worker.map(w => WorkerBroker.postMessage(w, method, ...message)));
@@ -216,10 +212,7 @@ function setupMainThread() {
           let result, error, target, method_name, method;
 
           try {
-            var _findTarget = findTarget(data.method);
-
-            method_name = _findTarget[0];
-            target = _findTarget[1];
+            [method_name, target] = findTarget(data.method);
 
             if (!target) {
               throw Error(`Worker broker could not dispatch message type ${data.method} on target ${data.target} because no object with that name is registered on main thread`);
@@ -311,11 +304,7 @@ function setupWorkerThread() {
   // Returns:
   //   - a promise that will be fulfilled if the main thread method returns a value (could be immediately, or async)
   //
-  WorkerBroker.postMessage = function (method) {
-    for (var _len2 = arguments.length, message = new Array(_len2 > 1 ? _len2 - 1 : 0), _key2 = 1; _key2 < _len2; _key2++) {
-      message[_key2 - 1] = arguments[_key2];
-    }
-
+  WorkerBroker.postMessage = function (method, ...message) {
     // Parse options
     let options = {};
 
@@ -389,10 +378,7 @@ function setupWorkerThread() {
         let result, error, target, method_name, method;
 
         try {
-          var _findTarget2 = findTarget(data.method);
-
-          method_name = _findTarget2[0];
-          target = _findTarget2[1];
+          [method_name, target] = findTarget(data.method);
 
           if (!target) {
             throw Error(`Worker broker could not dispatch message type ${data.method} on target ${data.target} because no object with that name is registered on main thread`);
@@ -464,11 +450,7 @@ function setupWorkerThread() {
 } // Special value wrapper, to indicate that we want to find and include transferable objects in the message
 
 
-WorkerBroker.withTransferables = function () {
-  for (var _len3 = arguments.length, value = new Array(_len3), _key3 = 0; _key3 < _len3; _key3++) {
-    value[_key3] = arguments[_key3];
-  }
-
+WorkerBroker.withTransferables = function (...value) {
   if (!(this instanceof WorkerBroker.withTransferables)) {
     return new WorkerBroker.withTransferables(...value);
   }
@@ -483,19 +465,7 @@ WorkerBroker.withTransferables = function () {
 // TODO: add option in case you DON'T want to transfer objects
 
 
-function findTransferables(source, parent, property, list) {
-  if (parent === void 0) {
-    parent = null;
-  }
-
-  if (property === void 0) {
-    property = null;
-  }
-
-  if (list === void 0) {
-    list = [];
-  }
-
+function findTransferables(source, parent = null, property = null, list = []) {
   if (!source) {
     return list;
   }
@@ -570,14 +540,10 @@ function methodForLevel(level) {
 // that would otherwise be repetitive or possibly logged thousands of times, such as per feature).
 
 
-function log(opts) {
+function log(opts, ...msg) {
   let level = typeof opts === 'object' ? opts.level : opts;
 
   if (LEVELS[level] <= LEVELS[log.level]) {
-    for (var _len = arguments.length, msg = new Array(_len > 1 ? _len - 1 : 0), _key = 1; _key < _len; _key++) {
-      msg[_key - 1] = arguments[_key];
-    }
-
     if (Thread.is_worker) {
       // Proxy to main thread
       return WorkerBroker$1.postMessage({
@@ -653,31 +619,7 @@ Utils._requests = {}; // XHR requests on current thread
 Utils._proxy_requests = {}; // XHR requests proxied to main thread
 // `request_key` is a user-provided key that can be later used to cancel the request
 
-Utils.io = function (url, timeout, responseType, method, headers, request_key, proxy) {
-  if (timeout === void 0) {
-    timeout = 60000;
-  }
-
-  if (responseType === void 0) {
-    responseType = 'text';
-  }
-
-  if (method === void 0) {
-    method = 'GET';
-  }
-
-  if (headers === void 0) {
-    headers = {};
-  }
-
-  if (request_key === void 0) {
-    request_key = null;
-  }
-
-  if (proxy === void 0) {
-    proxy = false;
-  }
-
+Utils.io = function (url, timeout = 60000, responseType = 'text', method = 'GET', headers = {}, request_key = null, proxy = false) {
   if (Thread.is_worker && Utils.isMicrosoft()) {
     // Some versions of IE11 and Edge will hang web workers when performing XHR requests
     // These requests can be proxied through the main thread
@@ -705,10 +647,22 @@ Utils.io = function (url, timeout, responseType, method, headers, request_key, p
       request.onload = () => {
         if (request.status === 200) {
           if (['text', 'json'].indexOf(request.responseType) > -1) {
-            resolve(request.responseText);
+            resolve({
+              body: request.responseText,
+              status: request.status
+            });
           } else {
-            resolve(request.response);
+            resolve({
+              body: request.response,
+              status: request.status
+            });
           }
+        } else if (request.status === 204) {
+          // No Content
+          resolve({
+            body: null,
+            status: request.status
+          });
         } else {
           reject(Error('Request error with a status of ' + request.statusText));
         }
@@ -882,13 +836,15 @@ Utils.interpolate = function (x, points, transform) {
 };
 
 Utils.toCSSColor = function (color) {
-  if (color[3] === 1) {
-    // full opacity
-    return `rgb(${color.slice(0, 3).map(c => Math.round(c * 255)).join(', ')})`;
-  } // RGB is between [0, 255] opacity is between [0, 1]
+  if (color != null) {
+    if (color[3] === 1) {
+      // full opacity
+      return `rgb(${color.slice(0, 3).map(c => Math.round(c * 255)).join(', ')})`;
+    } // RGB is between [0, 255] opacity is between [0, 1]
 
 
-  return `rgba(${color.map((c, i) => i < 3 && Math.round(c * 255) || c).join(', ')})`;
+    return `rgba(${color.map((c, i) => i < 3 && Math.round(c * 255) || c).join(', ')})`;
+  }
 };
 
 let debugSettings;
@@ -904,7 +860,9 @@ var debugSettings$1 = debugSettings = {
   // show hidden labels for debugging
   show_hidden_labels: false,
   // collect feature/geometry stats on styling layers
-  layer_stats: false
+  layer_stats: false,
+  // draw scene in wireframe mode
+  wireframe: false
 };
 function mergeDebugSettings(settings) {
   Object.assign(debugSettings, settings);
@@ -1231,11 +1189,7 @@ function subscribeMixin(target) {
       listeners = [];
     },
 
-    trigger(event) {
-      for (var _len = arguments.length, data = new Array(_len > 1 ? _len - 1 : 0), _key = 1; _key < _len; _key++) {
-        data[_key - 1] = arguments[_key];
-      }
-
+    trigger(event, ...data) {
       listeners.forEach(listener => {
         if (typeof listener[event] === 'function') {
           try {
@@ -1269,11 +1223,7 @@ function sliceObject(obj, keys) {
 // Texture management
 
 class Texture {
-  constructor(gl, name, options) {
-    if (options === void 0) {
-      options = {};
-    }
-
+  constructor(gl, name, options = {}) {
     options = Texture.sliceOptions(options); // exclude any non-texture-specific props
 
     this.gl = gl;
@@ -1329,10 +1279,9 @@ class Texture {
   } // Destroy a single texture instance
 
 
-  destroy(_temp) {
-    let _ref = _temp === void 0 ? {} : _temp,
-        force = _ref.force;
-
+  destroy({
+    force
+  } = {}) {
     if (this.retain_count > 0 && !force) {
       log('error', `Texture '${this.name}': destroying texture with retain count of '${this.retain_count}'`);
       return;
@@ -1370,11 +1319,7 @@ class Texture {
     }
   }
 
-  bind(unit) {
-    if (unit === void 0) {
-      unit = 0;
-    }
-
+  bind(unit = 0) {
     if (!this.valid) {
       return;
     }
@@ -1417,11 +1362,7 @@ class Texture {
   } // Sets texture from an url
 
 
-  setUrl(url, options) {
-    if (options === void 0) {
-      options = {};
-    }
-
+  setUrl(url, options = {}) {
     if (!this.valid) {
       return;
     }
@@ -1483,11 +1424,7 @@ class Texture {
   } // Sets texture to a raw image buffer
 
 
-  setData(width, height, data, options) {
-    if (options === void 0) {
-      options = {};
-    }
-
+  setData(width, height, data, options = {}) {
     this.width = width;
     this.height = height; // Convert regular array to typed array
 
@@ -1530,11 +1467,7 @@ class Texture {
   } // Uploads current image or buffer to the GPU (can be used to update animated textures on the fly)
 
 
-  update(source, options) {
-    if (options === void 0) {
-      options = {};
-    }
-
+  update(source, options = {}) {
     if (!this.valid) {
       return;
     }
@@ -1561,11 +1494,7 @@ class Texture {
   } // Determines appropriate filtering mode
 
 
-  setFiltering(options) {
-    if (options === void 0) {
-      options = {};
-    }
-
+  setFiltering(options = {}) {
     if (!this.valid) {
       return;
     }
@@ -2040,11 +1969,7 @@ GLSL.defineUniform = function (name, value) {
 */
 
 
-GLSL.expandVec3 = function (v, z) {
-  if (z === void 0) {
-    z = 1;
-  }
-
+GLSL.expandVec3 = function (v, z = 1) {
   let x;
 
   if (Array.isArray(v)) {
@@ -2068,11 +1993,7 @@ GLSL.expandVec3 = function (v, z) {
 */
 
 
-GLSL.expandVec4 = function (v, w) {
-  if (w === void 0) {
-    w = 1;
-  }
-
+GLSL.expandVec4 = function (v, w = 1) {
   let x;
 
   if (Array.isArray(v)) {
@@ -2427,11 +2348,7 @@ class ShaderProgram {
     } // Get GLSL definitions
 
 
-    const inject = Object.entries(uniforms).map((_ref) => {
-      let name = _ref[0],
-          uniform = _ref[1];
-      return GLSL.defineUniform(name, uniform);
-    }).filter(x => x); // Inject uniforms
+    const inject = Object.entries(uniforms).map(([name, uniform]) => GLSL.defineUniform(name, uniform)).filter(x => x); // Inject uniforms
     // NOTE: these are injected at the very top of the shaders, even before any #defines or #pragmas are added
     // this could cause some issues with certain #pragmas, or other functions that might expect #defines
 
@@ -2440,11 +2357,7 @@ class ShaderProgram {
   } // Set uniforms from a JS object, with inferred types
 
 
-  setUniforms(uniforms, reset_texture_unit) {
-    if (reset_texture_unit === void 0) {
-      reset_texture_unit = true;
-    }
-
+  setUniforms(uniforms, reset_texture_unit = true) {
     if (!this.compiled) {
       return;
     } // TODO: only update uniforms when changed
@@ -2795,13 +2708,8 @@ ShaderProgram.buildExtensionString = function (extensions) {
   return str;
 };
 
-ShaderProgram.addBlock = function (key) {
+ShaderProgram.addBlock = function (key, ...blocks) {
   ShaderProgram.blocks[key] = ShaderProgram.blocks[key] || [];
-
-  for (var _len = arguments.length, blocks = new Array(_len > 1 ? _len - 1 : 0), _key = 1; _key < _len; _key++) {
-    blocks[_key - 1] = arguments[_key];
-  }
-
   ShaderProgram.blocks[key].push(...blocks);
 }; // Remove all global shader blocks for a given key
 
@@ -2810,13 +2718,8 @@ ShaderProgram.removeBlock = function (key) {
   ShaderProgram.blocks[key] = [];
 };
 
-ShaderProgram.replaceBlock = function (key) {
+ShaderProgram.replaceBlock = function (key, ...blocks) {
   ShaderProgram.removeBlock(key);
-
-  for (var _len2 = arguments.length, blocks = new Array(_len2 > 1 ? _len2 - 1 : 0), _key2 = 1; _key2 < _len2; _key2++) {
-    blocks[_key2 - 1] = arguments[_key2];
-  }
-
   ShaderProgram.addBlock(key, ...blocks);
 }; // Compile & link a WebGL program from provided vertex and fragment shader sources
 // update a program if one is passed in. Create one if not. Alert and don't update anything if the shaders don't compile.
@@ -3003,9 +2906,9 @@ var VertexArrayObject = {
 };
 
 // Deep/recursive merge of one or more source objects into a destination object
-function mergeObjects(dest) {
-  for (let s = 0; s < (arguments.length <= 1 ? 0 : arguments.length - 1); s++) {
-    let source = s + 1 < 1 || arguments.length <= s + 1 ? undefined : arguments[s + 1];
+function mergeObjects(dest, ...sources) {
+  for (let s = 0; s < sources.length; s++) {
+    let source = sources[s];
 
     if (!source) {
       continue;
@@ -3086,9 +2989,7 @@ Geo.metersForTile = function (tile) {
 */
 
 
-Geo.tileForMeters = function (_ref, zoom) {
-  let x = _ref[0],
-      y = _ref[1];
+Geo.tileForMeters = function ([x, y], zoom) {
   return {
     x: Math.floor((x + Geo.half_circumference_meters) / (Geo.circumference_meters / Math.pow(2, zoom))),
     y: Math.floor((-y + Geo.half_circumference_meters) / (Geo.circumference_meters / Math.pow(2, zoom))),
@@ -3098,18 +2999,14 @@ Geo.tileForMeters = function (_ref, zoom) {
 // Optionally specify the axes to wrap
 
 
-Geo.wrapTile = function (_ref2, mask) {
-  let x = _ref2.x,
-      y = _ref2.y,
-      z = _ref2.z;
-
-  if (mask === void 0) {
-    mask = {
-      x: true,
-      y: false
-    };
-  }
-
+Geo.wrapTile = function ({
+  x,
+  y,
+  z
+}, mask = {
+  x: true,
+  y: false
+}) {
   var m = (1 << z) - 1;
 
   if (mask.x) {
@@ -3261,11 +3158,7 @@ Geo.geometryType = function (type) {
 // Adapted from https://github.com/Leaflet/Leaflet/blob/c10f405a112142b19785967ce0e142132a6095ad/src/layer/vector/Polygon.js#L57
 
 
-Geo.centroid = function (polygon, relative) {
-  if (relative === void 0) {
-    relative = true;
-  }
-
+Geo.centroid = function (polygon, relative = true) {
   if (!polygon || polygon.length === 0) {
     return;
   }
@@ -3723,14 +3616,14 @@ StyleParser.defaults = {
 
 StyleParser.macros = {
   // pseudo-random color by geometry id
-  'Style.color.pseudoRandomColor': function StyleColorPseudoRandomColor() {
+  'Style.color.pseudoRandomColor': function () {
     return [0.7 * (parseInt(feature.id, 16) / 100 % 1), // eslint-disable-line no-undef
     0.7 * (parseInt(feature.id, 16) / 10000 % 1), // eslint-disable-line no-undef
     0.7 * (parseInt(feature.id, 16) / 1000000 % 1), // eslint-disable-line no-undef
     1];
   },
   // random color
-  'Style.color.randomColor': function StyleColorRandomColor() {
+  'Style.color.randomColor': function () {
     return [0.7 * Math.random(), 0.7 * Math.random(), 0.7 * Math.random(), 1];
   }
 }; // A context object that is passed to style parsing functions to provide a scope of commonly used values
@@ -3748,8 +3641,9 @@ StyleParser.getFeatureParseContext = function (feature, tile, global) {
     units_per_meter_overzoom: tile.units_per_meter_overzoom
   };
 }; // Build a style param cache object
-// `value` is raw value, cache methods will add other properties as needed
-// `transform` is optional transform function to run on values (except function values)
+// `value` is a raw value, cache methods will add other properties as needed
+// `transform` is an optional, one-time transform function to run on values during setup
+// `dynamic_transform` is an optional post-processing function applied to the result of function-based properties
 
 
 const CACHE_TYPE = {
@@ -3759,11 +3653,7 @@ const CACHE_TYPE = {
 };
 StyleParser.CACHE_TYPE = CACHE_TYPE;
 
-StyleParser.createPropertyCache = function (obj, transform) {
-  if (transform === void 0) {
-    transform = null;
-  }
-
+StyleParser.createPropertyCache = function (obj, transform = null, dynamic_transform = null) {
   if (obj == null) {
     return;
   }
@@ -3787,6 +3677,7 @@ StyleParser.createPropertyCache = function (obj, transform) {
     c.type = CACHE_TYPE.ZOOM;
   } else if (typeof c.value === 'function') {
     c.type = CACHE_TYPE.DYNAMIC;
+    c.dynamic_transform = typeof dynamic_transform === 'function' ? dynamic_transform : null;
   } // apply optional transform function - usually a parsing function
 
 
@@ -3887,7 +3778,11 @@ StyleParser.createPointSizePropertyCache = function (obj, texture) {
 };
 
 StyleParser.evalCachedPointSizeProperty = function (val, sprite_info, texture_info, context) {
-  // no percentage-based calculation, one cache for all sprites
+  if (val == null) {
+    return;
+  } // no percentage-based calculation, one cache for all sprites
+
+
   if (!val.has_pct && !val.has_ratio) {
     return StyleParser.evalCachedProperty(val, context);
   }
@@ -3956,7 +3851,16 @@ StyleParser.evalCachedProperty = function (val, context) {
     // not yet evaulated for cache
     // Dynamic function-based
     if (typeof val.value === 'function') {
-      val.dynamic = val.value;
+      if (val.dynamic_transform) {
+        // apply an optional post-eval transform function
+        // e.g. apply device pixel ratio to font sizes, unit conversions, etc.
+        val.dynamic = function (context) {
+          return val.dynamic_transform(val.value(context));
+        };
+      } else {
+        val.dynamic = val.value;
+      }
+
       return tryEval(val.dynamic, context);
     } // Array of zoom-interpolated stops, e.g. [zoom, value] pairs
     else if (Array.isArray(val.value) && Array.isArray(val.value[0])) {
@@ -3974,13 +3878,13 @@ StyleParser.evalCachedProperty = function (val, context) {
 
 StyleParser.convertUnits = function (val, context) {
   // pre-parsed units
-  if (val.val != null) {
+  if (val.value != null) {
     if (val.units === 'px') {
       // convert from pixels
-      return val.val * Geo$1.metersPerPixel(context.zoom);
+      return val.value * Geo$1.metersPerPixel(context.zoom);
     }
 
-    return val.val;
+    return val.value;
   } // un-parsed unit string
   else if (typeof val === 'string') {
       if (val.trim().slice(-2) === 'px') {
@@ -4004,12 +3908,12 @@ StyleParser.convertUnits = function (val, context) {
 }; // Pre-parse units from string values
 
 
-StyleParser.parseUnits = function (val) {
+StyleParser.parseUnits = function (value) {
   var obj = {
-    val: parseNumber(val)
+    value: parseNumber(value)
   };
 
-  if (obj.val !== 0 && typeof val === 'string' && val.trim().slice(-2) === 'px') {
+  if (obj.value !== 0 && typeof value === 'string' && value.trim().slice(-2) === 'px') {
     obj.units = 'px';
   }
 
@@ -4070,12 +3974,10 @@ StyleParser.colorForString = function (string) {
 // { value: original, static: [r,g,b,a], zoom: { z: [r,g,b,a] }, dynamic: function(){...} }
 
 
-StyleParser.evalCachedColorProperty = function (val, context) {
-  if (context === void 0) {
-    context = {};
-  }
-
-  if (val.dynamic) {
+StyleParser.evalCachedColorProperty = function (val, context = {}) {
+  if (val == null) {
+    return;
+  } else if (val.dynamic) {
     let v = tryEval(val.dynamic, context);
 
     if (typeof v === 'string') {
@@ -4141,13 +4043,24 @@ StyleParser.evalCachedColorProperty = function (val, context) {
             return val.static;
           }
   }
-};
+}; // Evaluate color cache object and apply optional alpha override (alpha arg is a single value cache object)
 
-StyleParser.parseColor = function (val, context) {
-  if (context === void 0) {
-    context = {};
+
+StyleParser.evalCachedColorPropertyWithAlpha = function (val, alpha_prop, context) {
+  const color = StyleParser.evalCachedColorProperty(val, context);
+
+  if (color != null && alpha_prop != null) {
+    const alpha = StyleParser.evalCachedProperty(alpha_prop, context);
+
+    if (alpha != null) {
+      return [color[0], color[1], color[2], alpha];
+    }
   }
 
+  return color;
+};
+
+StyleParser.parseColor = function (val, context = {}) {
   if (typeof val === 'function') {
     val = tryEval(val, context);
   } // Parse CSS-style colors
@@ -4291,9 +4204,9 @@ class FeatureSelection {
   // Runs asynchronously, schedules selection buffer to be updated
 
 
-  getFeatureAt(point, _ref) {
-    let radius = _ref.radius;
-
+  getFeatureAt(point, {
+    radius
+  }) {
     // ensure requested point is in canvas bounds
     if (!point || point.x < 0 || point.y < 0 || point.x > 1 || point.y > 1) {
       return Promise.resolve({
@@ -4368,8 +4281,10 @@ class FeatureSelection {
 
         let feature_key,
             worker_id = 255;
-        let point = request.point,
-            radius = request.radius;
+        let {
+          point,
+          radius
+        } = request;
         let diam_px;
 
         if (!radius) {
@@ -4399,8 +4314,8 @@ class FeatureSelection {
         if (this.pixels.fill instanceof Function) {
           this.pixels.fill(0); // native typed array fill
         } else {
-          for (let p = 0; p < this.pixels.length; p++) {
-            this.pixels[p] = 0;
+          for (let _p = 0; _p < this.pixels.length; _p++) {
+            this.pixels[_p] = 0;
           }
         } // capture pixels
 
@@ -4596,6 +4511,19 @@ FeatureSelection.map_prefix = 0; // set by worker to worker id #
 
 FeatureSelection.defaultColor = [0, 0, 0, 1];
 
+// WebGL constants - need to import these separately to make them available in the web worker
+var gl;
+var gl$1 = gl = {};
+/* DataType */
+
+gl.BYTE = 0x1400;
+gl.UNSIGNED_BYTE = 0x1401;
+gl.SHORT = 0x1402;
+gl.UNSIGNED_SHORT = 0x1403;
+gl.INT = 0x1404;
+gl.UNSIGNED_INT = 0x1405;
+gl.FLOAT = 0x1406;
+
 // Manage rendering for primitives
 
 class VBOMesh {
@@ -4652,11 +4580,7 @@ class VBOMesh {
   // Returns true if mesh requests a render on next frame (e.g. for fade animations)
 
 
-  render(options) {
-    if (options === void 0) {
-      options = {};
-    }
-
+  render(options = {}) {
     if (!this.valid) {
       return false;
     }
@@ -4988,9 +4912,7 @@ Vector.rot = function (v, a) {
 // Angles in quadrant III and IV are mapped to [-PI, 0]
 
 
-Vector.angle = function (_ref) {
-  let x = _ref[0],
-      y = _ref[1];
+Vector.angle = function ([x, y]) {
   return Math.atan2(y, x);
 }; // Get angle between two vectors
 
@@ -5598,9 +5520,12 @@ class DataSource {
   */
 
 
-  static scaleData(source, _ref) {
-    let z = _ref.coords.z,
-        min = _ref.min;
+  static scaleData(source, {
+    coords: {
+      z
+    },
+    min
+  }) {
     let units_per_meter = Geo$1.unitsPerMeter(z);
 
     for (var t in source.layers) {
@@ -5670,9 +5595,10 @@ class DataSource {
   // e.g. can be used to skip fetching data for some zooms, reusing data from next lowest available zoom instead
 
 
-  setZooms(_ref2) {
-    let max_zoom = _ref2.max_zoom,
-        zooms = _ref2.zooms;
+  setZooms({
+    max_zoom,
+    zooms
+  }) {
     // overzoom will apply for zooms higher than this
     this.max_zoom = max_zoom != null ? max_zoom : Geo$1.default_source_max_zoom;
 
@@ -5758,14 +5684,9 @@ class NetworkSource extends DataSource {
     this.response_type = ''; // use to set explicit XHR type
     // Add extra URL params, and warn on duplicates
 
-    let _URLs$addParamsToURL = addParamsToURL(source.url, source.url_params),
-        url = _URLs$addParamsToURL[0],
-        dupes = _URLs$addParamsToURL[1];
-
+    let [url, dupes] = addParamsToURL(source.url, source.url_params);
     this.url = url;
-    dupes.forEach((_ref3) => {
-      let param = _ref3[0],
-          value = _ref3[1];
+    dupes.forEach(([param, value]) => {
       log({
         level: 'warn',
         once: true
@@ -5788,19 +5709,26 @@ class NetworkSource extends DataSource {
       let promise = Utils.io(url, 60 * 1000, this.response_type, 'GET', this.request_headers, request_id);
       source_data.request_id = request_id;
       source_data.error = null;
-      promise.then(body => {
-        dest.debug.response_size = body.length || body.byteLength;
+      promise.then(({
+        body
+      }) => {
+        dest.debug.response_size = body && (body.length || body.byteLength);
         dest.debug.network = +new Date() - dest.debug.network;
         dest.debug.parsing = +new Date(); // Apply optional data transform on raw network response
 
-        if (typeof this.preprocess === 'function') {
+        if (body != null && typeof this.preprocess === 'function') {
           body = this.preprocess(body);
         } // Return data immediately, or after user-returned promise resolves
 
 
         body = body instanceof Promise ? body : Promise.resolve(body);
         body.then(body => {
-          this.parseSourceData(dest, source_data, body);
+          if (body != null) {
+            this.parseSourceData(dest, source_data, body);
+          } else {
+            source_data.layers = {}; // for cases where server returned no content (e.g. 204 response)
+          }
+
           dest.debug.parsing = +new Date() - dest.debug.parsing;
           resolve(dest);
         });
@@ -5869,11 +5797,7 @@ class NetworkTileSource extends NetworkSource {
 
   parseBounds(source) {
     if (Array.isArray(source.bounds) && source.bounds.length === 4) {
-      const _source$bounds = source.bounds,
-            w = _source$bounds[0],
-            s = _source$bounds[1],
-            e = _source$bounds[2],
-            n = _source$bounds[3];
+      const [w, s, e, n] = source.bounds;
       return {
         latlng: [...source.bounds],
         meters: {
@@ -5979,10 +5903,11 @@ class NetworkTileSource extends NetworkSource {
     return ''; // for 1x (or less) displays, no URL modifier is used (following @2x URL convention)
   }
 
-  toQuadKey(_ref4) {
-    let x = _ref4.x,
-        y = _ref4.y,
-        z = _ref4.z;
+  toQuadKey({
+    x,
+    y,
+    z
+  }) {
     let quadkey = '';
 
     for (let i = z; i > 0; i--) {
@@ -6013,10 +5938,11 @@ const TileID = {
     };
   },
 
-  coordKey(_ref) {
-    let x = _ref.x,
-        y = _ref.y,
-        z = _ref.z;
+  coordKey({
+    x,
+    y,
+    z
+  }) {
     return x + '/' + y + '/' + z;
   },
 
@@ -6040,10 +5966,11 @@ const TileID = {
     return this.coordForTileZooms(coords, source.zooms);
   },
 
-  coordAtZoom(_ref2, zoom) {
-    let x = _ref2.x,
-        y = _ref2.y,
-        z = _ref2.z;
+  coordAtZoom({
+    x,
+    y,
+    z
+  }, zoom) {
     zoom = Math.max(0, zoom); // zoom can't go below zero
 
     if (z !== zoom) {
@@ -6060,10 +5987,11 @@ const TileID = {
     });
   },
 
-  coordForTileZooms(_ref3, zooms) {
-    let x = _ref3.x,
-        y = _ref3.y,
-        z = _ref3.z;
+  coordForTileZooms({
+    x,
+    y,
+    z
+  }, zooms) {
     const nz = this.findZoomInRange(z, zooms);
 
     if (nz !== z) {
@@ -6087,10 +6015,10 @@ const TileID = {
 
   isDescendant(parent, descendant) {
     if (descendant.z > parent.z) {
-      let _this$coordAtZoom = this.coordAtZoom(descendant, parent.z),
-          x = _this$coordAtZoom.x,
-          y = _this$coordAtZoom.y;
-
+      let {
+        x,
+        y
+      } = this.coordAtZoom(descendant, parent.z);
       return parent.x === x && parent.y === y;
     }
 
@@ -6098,11 +6026,11 @@ const TileID = {
   },
 
   // Return identifying info for tile's parent tile
-  parent(_ref4) {
-    let coords = _ref4.coords,
-        source = _ref4.source,
-        style_z = _ref4.style_z;
-
+  parent({
+    coords,
+    source,
+    style_z
+  }) {
     if (style_z > 0) {
       // no more tiles above style zoom 0
       style_z--;
@@ -6124,15 +6052,11 @@ const TileID = {
   },
 
   // Return identifying info for tile's child tiles
-  children(_ref5, CACHE) {
-    let coords = _ref5.coords,
-        source = _ref5.source,
-        style_z = _ref5.style_z;
-
-    if (CACHE === void 0) {
-      CACHE = {};
-    }
-
+  children({
+    coords,
+    source,
+    style_z
+  }, CACHE = {}) {
     style_z++;
     const c = this.coordForTileZooms(this.coordAtZoom(coords, style_z - source.zoom_bias), source.zooms);
 
@@ -6321,9 +6245,10 @@ class RasterSource extends RasterTileSource {
   // and clipping the raster against vector source data.
 
 
-  async tileTexture(tile, _ref) {
-    let blend = _ref.blend,
-        generation = _ref.generation;
+  async tileTexture(tile, {
+    blend,
+    generation
+  }) {
     let coords = this.adjustRasterTileZoom(tile);
     const use_alpha = blend !== 'opaque'; // ignore source alpha multiplier with opaque blending
 
@@ -6469,29 +6394,42 @@ DataSource.register('Raster', source => {
   return RasterTileSource.urlHasTilePattern(source.url) ? RasterTileSource : RasterSource;
 });
 
+// Rearranges element array for triangles into a new element array that draws a wireframe
+// Used for debugging
+function makeWireframeForTriangleElementData(element_data) {
+  const wireframe_data = new Uint16Array(element_data.length * 2); // Draw triangles as lines:
+  // Make a copy of element_data, and for every group of three vertices, duplicate
+  // each vertex according to the following pattern:
+  // [1, 2, 3] => [1, 2, 2, 3, 3, 1]
+  // This takes three vertices which would have been interpreted as a triangle,
+  // and converts them into three 2-vertex line segments.
+
+  for (let i = 0; i < element_data.length; i += 3) {
+    wireframe_data.set([element_data[i], element_data[i + 1], element_data[i + 1], element_data[i + 2], element_data[i + 2], element_data[i]], i * 2);
+  }
+
+  return wireframe_data;
+}
+
 var selection_fragment_source = "// Fragment shader for feature selection passes\n// Renders in silhouette according to selection (picking) color, or black if none defined\n\n#ifdef TANGRAM_FEATURE_SELECTION\n    varying vec4 v_selection_color;\n#endif\n\nvoid main (void) {\n    #ifdef TANGRAM_FEATURE_SELECTION\n        gl_FragColor = v_selection_color;\n    #else\n        gl_FragColor = vec4(0., 0., 0., 1.);\n    #endif\n}\n";
 
 var rasters_source = "// Uniforms defining raster textures and macros for accessing them\n\n#ifdef TANGRAM_FRAGMENT_SHADER\nuniform sampler2D u_rasters[TANGRAM_NUM_RASTER_SOURCES];    // raster tile texture samplers\nuniform vec2 u_raster_sizes[TANGRAM_NUM_RASTER_SOURCES];    // raster tile texture sizes (width/height in pixels)\nuniform vec3 u_raster_offsets[TANGRAM_NUM_RASTER_SOURCES];  // raster tile texture UV starting offset for tile\n\n// Raster sources can optionally mask by the alpha channel (render with only full or no alpha, based on a threshold),\n// which is used for handling transparency outside the raster image when rendering with opaque blending\n#if defined(TANGRAM_HAS_MASKED_RASTERS) && !defined(TANGRAM_ALL_MASKED_RASTERS) // only add uniform if we need it\nuniform bool u_raster_mask_alpha;\n#endif\n\n// Note: the raster accessors below are #defines rather than functions to\n// avoid issues with constant integer expressions for array indices\n\n// Adjusts UVs in model space to account for raster tile texture overzooming\n// (applies scale and offset adjustments)\n#define adjustRasterUV(raster_index, uv) \\\n    ((uv) * u_raster_offsets[raster_index].z + u_raster_offsets[raster_index].xy)\n\n// Returns the UVs of the current model position for a raster sampler\n#define currentRasterUV(raster_index) \\\n    (adjustRasterUV(raster_index, v_modelpos_base_zoom.xy))\n\n// Returns pixel location in raster tile texture at current model position\n#define currentRasterPixel(raster_index) \\\n    (currentRasterUV(raster_index) * rasterPixelSize(raster_index))\n\n// Samples a raster tile texture for the current model position\n#define sampleRaster(raster_index) \\\n    (texture2D(u_rasters[raster_index], currentRasterUV(raster_index)))\n\n// Samples a raster tile texture for a given pixel\n#define sampleRasterAtPixel(raster_index, pixel) \\\n    (texture2D(u_rasters[raster_index], (pixel) / rasterPixelSize(raster_index)))\n\n// Returns size of raster sampler in pixels\n#define rasterPixelSize(raster_index) \\\n    (u_raster_sizes[raster_index])\n\n#endif\n";
 
-// Rendering styles
-
 var Style = {
-  init(_temp) {
-    let _ref = _temp === void 0 ? {} : _temp,
-        generation = _ref.generation,
-        styles = _ref.styles,
-        _ref$sources = _ref.sources,
-        sources = _ref$sources === void 0 ? {} : _ref$sources,
-        introspection = _ref.introspection;
-
+  init({
+    generation,
+    styles,
+    sources = {},
+    introspection
+  } = {}) {
     this.setGeneration(generation);
     this.styles = styles; // styles for scene
 
     this.sources = sources; // data sources for scene
 
-    this.defines = this.hasOwnProperty('defines') && this.defines || {}; // #defines to be injected into the shaders
+    this.defines = Object.prototype.hasOwnProperty.call(this, 'defines') && this.defines || {}; // #defines to be injected into the shaders
 
-    this.shaders = this.hasOwnProperty('shaders') && this.shaders || {}; // shader customization (uniforms, defines, blocks, etc.)
+    this.shaders = Object.prototype.hasOwnProperty.call(this, 'shaders') && this.shaders || {}; // shader customization (uniforms, defines, blocks, etc.)
 
     this.introspection = introspection || false;
     this.selection = this.selection || this.introspection || false; // flag indicating if this style supports feature selection
@@ -6508,6 +6446,10 @@ var Style = {
 
     this.tile_data = {};
     this.stencil_proxy_tiles = true; // applied to proxy tiles w/non-opaque blend mode to avoid compounding alpha
+
+    this.variants = {}; // mesh variants by variant key
+
+    this.vertex_layouts = {}; // vertex layouts by variant key
     // Default world coords to wrap every 100,000 meters, can turn off by setting this to 'false'
 
     this.defines.TANGRAM_WORLD_POSITION_WRAP = 100000; // Blending
@@ -6542,7 +6484,9 @@ var Style = {
 
     Light.setMode(this.lighting, this); // Setup raster samplers if needed
 
-    this.setupRasters();
+    this.setupRasters(); // Setup shader definitions for custom attributes
+
+    this.setupCustomAttributes();
     this.initialized = true;
   },
 
@@ -6765,6 +6709,19 @@ var Style = {
 
       if (!style) {
         return; // skip feature
+      } // Custom attributes
+
+
+      if (this.shaders.attributes) {
+        style.attributes = style.attributes || {};
+
+        for (const aname in this.shaders.attributes) {
+          style.attributes[aname] = StyleParser.evalCachedProperty(draw.attributes && draw.attributes[aname], context); // set attribute value to zero for null/undefined/non-numeric values
+
+          if (typeof style.attributes[aname] !== 'number') {
+            style.attributes[aname] = 0;
+          }
+        }
       } // Feature selection (only if feature is marked as interactive, and style supports it)
 
 
@@ -6821,6 +6778,15 @@ var Style = {
 
       if (!draw) {
         return;
+      } // Custom attributes
+
+
+      if (this.shaders.attributes) {
+        draw.attributes = draw.attributes || {};
+
+        for (const aname in this.shaders.attributes) {
+          draw.attributes[aname] = StyleParser.createPropertyCache(draw.attributes[aname] != null ? draw.attributes[aname] : 0);
+        }
       }
 
       draw.preprocessed = true;
@@ -6878,12 +6844,17 @@ var Style = {
     this.max_texture_size = Texture.getMaxTextureSize(this.gl);
   },
 
-  makeMesh(vertex_data, vertex_elements, options) {
-    if (options === void 0) {
-      options = {};
+  makeMesh(vertex_data, vertex_elements, options = {}) {
+    let vertex_layout = this.vertexLayoutForMeshVariant(options.variant);
+
+    if (debugSettings$1.wireframe) {
+      // In wireframe debug mode, transform mesh into lines
+      vertex_elements = makeWireframeForTriangleElementData(vertex_elements);
+      return new VBOMesh(this.gl, vertex_data, vertex_elements, vertex_layout, _extends({}, options, {
+        draw_mode: this.gl.LINES
+      }));
     }
 
-    let vertex_layout = this.vertexLayoutForMeshVariant(options.variant);
     return new VBOMesh(this.gl, vertex_data, vertex_elements, vertex_layout, options);
   },
 
@@ -6892,11 +6863,7 @@ var Style = {
   },
 
   // Get a specific program, compiling if necessary
-  getProgram(key) {
-    if (key === void 0) {
-      key = 'program';
-    }
-
+  getProgram(key = 'program') {
     this.compileSetup();
     const program = this[key];
 
@@ -6911,6 +6878,7 @@ var Style = {
         program.compile();
       } catch (e) {
         log('error', `Style: error compiling program for style '${this.name}' (program key '${key}')`, this, e.stack, e.type, e.shader_errors);
+        throw e; // re-throw so users can be notified via event subscriptions
       }
     }
 
@@ -6985,11 +6953,7 @@ var Style = {
   },
 
   // Add a shader block
-  addShaderBlock(key, block, scope) {
-    if (scope === void 0) {
-      scope = null;
-    }
-
+  addShaderBlock(key, block, scope = null) {
     this.shaders.blocks = this.shaders.blocks || {};
     this.shaders.blocks[key] = this.shaders.blocks[key] || [];
     this.shaders.blocks[key].push(block);
@@ -7009,11 +6973,7 @@ var Style = {
     }
   },
 
-  replaceShaderBlock(key, block, scope) {
-    if (scope === void 0) {
-      scope = null;
-    }
-
+  replaceShaderBlock(key, block, scope = null) {
     this.removeShaderBlock(key);
     this.addShaderBlock(key, block, scope);
   },
@@ -7185,6 +7145,65 @@ var Style = {
     }));
   },
 
+  // Setup shader definitions for custom attributes
+  setupCustomAttributes() {
+    if (this.shaders.attributes) {
+      for (const [aname, attrib] of Object.entries(this.shaders.attributes)) {
+        // alias each custom attribute to the internal attribute name in vertex shader,
+        // and internal varying name in fragment shader (if varying is enabled)
+        if (attrib.type === 'float') {
+          if (attrib.varying !== false) {
+            this.addShaderBlock('attributes', `
+                            #ifdef TANGRAM_VERTEX_SHADER
+                                attribute float a_${aname};
+                                varying float v_${aname};
+                                #define ${aname} a_${aname}
+                            #else
+                                varying float v_${aname};
+                                #define ${aname} v_${aname}
+                            #endif
+                        `);
+            this.addShaderBlock('setup', `#ifdef TANGRAM_VERTEX_SHADER\nv_${aname} = a_${aname};\n#endif`);
+          } else {
+            this.addShaderBlock('attributes', `
+                            #ifdef TANGRAM_VERTEX_SHADER
+                                attribute float a_${aname};
+                                #define ${aname} a_${aname}
+                            #endif
+                        `);
+          }
+        }
+      }
+    }
+  },
+
+  // Add custom attributes to a list of attributes for initializing a vertex layout
+  addCustomAttributesToAttributeList(attribs) {
+    if (this.shaders.attributes) {
+      for (const [aname, attrib] of Object.entries(this.shaders.attributes)) {
+        if (attrib.type === 'float') {
+          attribs.push({
+            name: `a_${aname}`,
+            size: 1,
+            type: gl$1.FLOAT,
+            normalized: false
+          });
+        }
+      }
+    }
+
+    return attribs;
+  },
+
+  // Add current feature values for custom attributes to vertex template
+  addCustomAttributesToVertexTemplate(draw, index) {
+    if (this.shaders.attributes) {
+      for (let aname in this.shaders.attributes) {
+        this.vertex_template[index++] = draw.attributes[aname] != null ? draw.attributes[aname] : 0;
+      }
+    }
+  },
+
   // Setup any GL state for rendering
   setup() {
     this.setUniforms();
@@ -7270,19 +7289,6 @@ function addLayerDebugEntry(target, layer, faeture_count, geom_count, styles, ba
   }
 }
 
-// WebGL constants - need to import these separately to make them available in the web worker
-var gl;
-var gl$1 = gl = {};
-/* DataType */
-
-gl.BYTE = 0x1400;
-gl.UNSIGNED_BYTE = 0x1401;
-gl.SHORT = 0x1402;
-gl.UNSIGNED_SHORT = 0x1403;
-gl.INT = 0x1404;
-gl.UNSIGNED_INT = 0x1405;
-gl.FLOAT = 0x1406;
-
 let MAX_VALUE = Math.pow(2, 16) - 1;
 let has_element_index_uint = false;
 class VertexElements {
@@ -7343,11 +7349,9 @@ let array_types = {
 // Used to construct a mesh/VBO for rendering
 
 class VertexData {
-  constructor(vertex_layout, _temp) {
-    let _ref = _temp === void 0 ? {} : _temp,
-        _ref$prealloc = _ref.prealloc,
-        prealloc = _ref$prealloc === void 0 ? 500 : _ref$prealloc;
-
+  constructor(vertex_layout, {
+    prealloc = 500
+  } = {}) {
     this.vertex_layout = vertex_layout;
     this.vertex_elements = new VertexElements();
     this.stride = this.vertex_layout.stride;
@@ -7608,9 +7612,9 @@ const tile_bounds = [{
   y: 0
 }, {
   x: Geo$1.tile_scale,
-  y: -Geo$1.tile_scale // TODO: correct for flipped y-axis?
-
-}];
+  y: -Geo$1.tile_scale
+} // TODO: correct for flipped y-axis?
+];
 const default_uvs = [0, 0, 1, 1]; // Tests if a line segment (from point A to B) is outside the tile bounds
 // (within a certain tolerance to account for geometry nearly on tile edges)
 
@@ -7632,6 +7636,7 @@ function isCoordOutsideTile(coord, tolerance) {
 }
 
 var earcut_1 = earcut;
+var default_1 = earcut;
 
 function earcut(data, holeIndices, dim) {
 
@@ -7642,9 +7647,9 @@ function earcut(data, holeIndices, dim) {
         outerNode = linkedList(data, 0, outerLen, dim, true),
         triangles = [];
 
-    if (!outerNode) return triangles;
+    if (!outerNode || outerNode.next === outerNode.prev) return triangles;
 
-    var minX, minY, maxX, maxY, x, y, size;
+    var minX, minY, maxX, maxY, x, y, invSize;
 
     if (hasHoles) outerNode = eliminateHoles(data, holeIndices, outerNode, dim);
 
@@ -7662,11 +7667,12 @@ function earcut(data, holeIndices, dim) {
             if (y > maxY) maxY = y;
         }
 
-        // minX, minY and size are later used to transform coords into integers for z-order calculation
-        size = Math.max(maxX - minX, maxY - minY);
+        // minX, minY and invSize are later used to transform coords into integers for z-order calculation
+        invSize = Math.max(maxX - minX, maxY - minY);
+        invSize = invSize !== 0 ? 1 / invSize : 0;
     }
 
-    earcutLinked(outerNode, triangles, dim, minX, minY, size);
+    earcutLinked(outerNode, triangles, dim, minX, minY, invSize);
 
     return triangles;
 }
@@ -7702,7 +7708,7 @@ function filterPoints(start, end) {
         if (!p.steiner && (equals(p, p.next) || area(p.prev, p, p.next) === 0)) {
             removeNode(p);
             p = end = p.prev;
-            if (p === p.next) return null;
+            if (p === p.next) break;
             again = true;
 
         } else {
@@ -7714,11 +7720,11 @@ function filterPoints(start, end) {
 }
 
 // main ear slicing loop which triangulates a polygon (given as a linked list)
-function earcutLinked(ear, triangles, dim, minX, minY, size, pass) {
+function earcutLinked(ear, triangles, dim, minX, minY, invSize, pass) {
     if (!ear) return;
 
     // interlink polygon nodes in z-order
-    if (!pass && size) indexCurve(ear, minX, minY, size);
+    if (!pass && invSize) indexCurve(ear, minX, minY, invSize);
 
     var stop = ear,
         prev, next;
@@ -7728,7 +7734,7 @@ function earcutLinked(ear, triangles, dim, minX, minY, size, pass) {
         prev = ear.prev;
         next = ear.next;
 
-        if (size ? isEarHashed(ear, minX, minY, size) : isEar(ear)) {
+        if (invSize ? isEarHashed(ear, minX, minY, invSize) : isEar(ear)) {
             // cut off the triangle
             triangles.push(prev.i / dim);
             triangles.push(ear.i / dim);
@@ -7736,7 +7742,7 @@ function earcutLinked(ear, triangles, dim, minX, minY, size, pass) {
 
             removeNode(ear);
 
-            // skipping the next vertice leads to less sliver triangles
+            // skipping the next vertex leads to less sliver triangles
             ear = next.next;
             stop = next.next;
 
@@ -7749,16 +7755,16 @@ function earcutLinked(ear, triangles, dim, minX, minY, size, pass) {
         if (ear === stop) {
             // try filtering points and slicing again
             if (!pass) {
-                earcutLinked(filterPoints(ear), triangles, dim, minX, minY, size, 1);
+                earcutLinked(filterPoints(ear), triangles, dim, minX, minY, invSize, 1);
 
             // if this didn't work, try curing all small self-intersections locally
             } else if (pass === 1) {
-                ear = cureLocalIntersections(ear, triangles, dim);
-                earcutLinked(ear, triangles, dim, minX, minY, size, 2);
+                ear = cureLocalIntersections(filterPoints(ear), triangles, dim);
+                earcutLinked(ear, triangles, dim, minX, minY, invSize, 2);
 
             // as a last resort, try splitting the remaining polygon into two
             } else if (pass === 2) {
-                splitEarcut(ear, triangles, dim, minX, minY, size);
+                splitEarcut(ear, triangles, dim, minX, minY, invSize);
             }
 
             break;
@@ -7786,7 +7792,7 @@ function isEar(ear) {
     return true;
 }
 
-function isEarHashed(ear, minX, minY, size) {
+function isEarHashed(ear, minX, minY, invSize) {
     var a = ear.prev,
         b = ear,
         c = ear.next;
@@ -7800,27 +7806,39 @@ function isEarHashed(ear, minX, minY, size) {
         maxTY = a.y > b.y ? (a.y > c.y ? a.y : c.y) : (b.y > c.y ? b.y : c.y);
 
     // z-order range for the current triangle bbox;
-    var minZ = zOrder(minTX, minTY, minX, minY, size),
-        maxZ = zOrder(maxTX, maxTY, minX, minY, size);
+    var minZ = zOrder(minTX, minTY, minX, minY, invSize),
+        maxZ = zOrder(maxTX, maxTY, minX, minY, invSize);
 
-    // first look for points inside the triangle in increasing z-order
-    var p = ear.nextZ;
+    var p = ear.prevZ,
+        n = ear.nextZ;
 
-    while (p && p.z <= maxZ) {
+    // look for points inside the triangle in both directions
+    while (p && p.z >= minZ && n && n.z <= maxZ) {
         if (p !== ear.prev && p !== ear.next &&
             pointInTriangle(a.x, a.y, b.x, b.y, c.x, c.y, p.x, p.y) &&
             area(p.prev, p, p.next) >= 0) return false;
-        p = p.nextZ;
+        p = p.prevZ;
+
+        if (n !== ear.prev && n !== ear.next &&
+            pointInTriangle(a.x, a.y, b.x, b.y, c.x, c.y, n.x, n.y) &&
+            area(n.prev, n, n.next) >= 0) return false;
+        n = n.nextZ;
     }
 
-    // then look for points in decreasing z-order
-    p = ear.prevZ;
-
+    // look for remaining points in decreasing z-order
     while (p && p.z >= minZ) {
         if (p !== ear.prev && p !== ear.next &&
             pointInTriangle(a.x, a.y, b.x, b.y, c.x, c.y, p.x, p.y) &&
             area(p.prev, p, p.next) >= 0) return false;
         p = p.prevZ;
+    }
+
+    // look for remaining points in increasing z-order
+    while (n && n.z <= maxZ) {
+        if (n !== ear.prev && n !== ear.next &&
+            pointInTriangle(a.x, a.y, b.x, b.y, c.x, c.y, n.x, n.y) &&
+            area(n.prev, n, n.next) >= 0) return false;
+        n = n.nextZ;
     }
 
     return true;
@@ -7848,11 +7866,11 @@ function cureLocalIntersections(start, triangles, dim) {
         p = p.next;
     } while (p !== start);
 
-    return p;
+    return filterPoints(p);
 }
 
 // try splitting polygon into two and triangulate them independently
-function splitEarcut(start, triangles, dim, minX, minY, size) {
+function splitEarcut(start, triangles, dim, minX, minY, invSize) {
     // look for a valid diagonal that divides the polygon into two
     var a = start;
     do {
@@ -7867,8 +7885,8 @@ function splitEarcut(start, triangles, dim, minX, minY, size) {
                 c = filterPoints(c, c.next);
 
                 // run earcut on each half
-                earcutLinked(a, triangles, dim, minX, minY, size);
-                earcutLinked(c, triangles, dim, minX, minY, size);
+                earcutLinked(a, triangles, dim, minX, minY, invSize);
+                earcutLinked(c, triangles, dim, minX, minY, invSize);
                 return;
             }
             b = b.next;
@@ -7910,6 +7928,9 @@ function eliminateHole(hole, outerNode) {
     outerNode = findHoleBridge(hole, outerNode);
     if (outerNode) {
         var b = splitPolygon(outerNode, hole);
+
+        // filter collinear points around the cuts
+        filterPoints(outerNode, outerNode.next);
         filterPoints(b, b.next);
     }
 }
@@ -7925,7 +7946,7 @@ function findHoleBridge(hole, outerNode) {
     // find a segment intersected by a ray from the hole's leftmost point to the left;
     // segment's endpoint with lesser x will be potential connection point
     do {
-        if (hy <= p.y && hy >= p.next.y) {
+        if (hy <= p.y && hy >= p.next.y && p.next.y !== p.y) {
             var x = p.x + (hy - p.y) * (p.next.x - p.x) / (p.next.y - p.y);
             if (x <= hx && x > qx) {
                 qx = x;
@@ -7941,7 +7962,7 @@ function findHoleBridge(hole, outerNode) {
 
     if (!m) return null;
 
-    if (hx === qx) return m.prev; // hole touches outer segment; pick lower endpoint
+    if (hx === qx) return m; // hole touches outer segment; pick leftmost endpoint
 
     // look for points inside the triangle of hole point, segment intersection and endpoint;
     // if there are no points found, we have a valid connection;
@@ -7953,31 +7974,37 @@ function findHoleBridge(hole, outerNode) {
         tanMin = Infinity,
         tan;
 
-    p = m.next;
+    p = m;
 
-    while (p !== stop) {
-        if (hx >= p.x && p.x >= mx &&
+    do {
+        if (hx >= p.x && p.x >= mx && hx !== p.x &&
                 pointInTriangle(hy < my ? hx : qx, hy, mx, my, hy < my ? qx : hx, hy, p.x, p.y)) {
 
             tan = Math.abs(hy - p.y) / (hx - p.x); // tangential
 
-            if ((tan < tanMin || (tan === tanMin && p.x > m.x)) && locallyInside(p, hole)) {
+            if (locallyInside(p, hole) &&
+                (tan < tanMin || (tan === tanMin && (p.x > m.x || (p.x === m.x && sectorContainsSector(m, p)))))) {
                 m = p;
                 tanMin = tan;
             }
         }
 
         p = p.next;
-    }
+    } while (p !== stop);
 
     return m;
 }
 
+// whether sector in vertex m contains sector in vertex p in the same coordinates
+function sectorContainsSector(m, p) {
+    return area(m.prev, m, p.prev) < 0 && area(p.next, m, m.next) < 0;
+}
+
 // interlink polygon nodes in z-order
-function indexCurve(start, minX, minY, size) {
+function indexCurve(start, minX, minY, invSize) {
     var p = start;
     do {
-        if (p.z === null) p.z = zOrder(p.x, p.y, minX, minY, size);
+        if (p.z === null) p.z = zOrder(p.x, p.y, minX, minY, invSize);
         p.prevZ = p.prev;
         p.nextZ = p.next;
         p = p.next;
@@ -8010,20 +8037,11 @@ function sortLinked(list) {
                 q = q.nextZ;
                 if (!q) break;
             }
-
             qSize = inSize;
 
             while (pSize > 0 || (qSize > 0 && q)) {
 
-                if (pSize === 0) {
-                    e = q;
-                    q = q.nextZ;
-                    qSize--;
-                } else if (qSize === 0 || !q) {
-                    e = p;
-                    p = p.nextZ;
-                    pSize--;
-                } else if (p.z <= q.z) {
+                if (pSize !== 0 && (qSize === 0 || !q || p.z <= q.z)) {
                     e = p;
                     p = p.nextZ;
                     pSize--;
@@ -8051,11 +8069,11 @@ function sortLinked(list) {
     return list;
 }
 
-// z-order of a point given coords and size of the data bounding box
-function zOrder(x, y, minX, minY, size) {
+// z-order of a point given coords and inverse of the longer side of data bbox
+function zOrder(x, y, minX, minY, invSize) {
     // coords are transformed into non-negative 15-bit integer range
-    x = 32767 * (x - minX) / size;
-    y = 32767 * (y - minY) / size;
+    x = 32767 * (x - minX) * invSize;
+    y = 32767 * (y - minY) * invSize;
 
     x = (x | (x << 8)) & 0x00FF00FF;
     x = (x | (x << 4)) & 0x0F0F0F0F;
@@ -8075,7 +8093,7 @@ function getLeftmost(start) {
     var p = start,
         leftmost = start;
     do {
-        if (p.x < leftmost.x) leftmost = p;
+        if (p.x < leftmost.x || (p.x === leftmost.x && p.y < leftmost.y)) leftmost = p;
         p = p.next;
     } while (p !== start);
 
@@ -8091,8 +8109,10 @@ function pointInTriangle(ax, ay, bx, by, cx, cy, px, py) {
 
 // check if a diagonal between two polygon nodes is valid (lies in polygon interior)
 function isValidDiagonal(a, b) {
-    return a.next.i !== b.i && a.prev.i !== b.i && !intersectsPolygon(a, b) &&
-           locallyInside(a, b) && locallyInside(b, a) && middleInside(a, b);
+    return a.next.i !== b.i && a.prev.i !== b.i && !intersectsPolygon(a, b) && // dones't intersect other edges
+           (locallyInside(a, b) && locallyInside(b, a) && middleInside(a, b) && // locally visible
+            (area(a.prev, a, b.prev) || area(a, b.prev, b)) || // does not create opposite-facing sectors
+            equals(a, b) && area(a.prev, a, a.next) > 0 && area(b.prev, b, b.next) > 0); // special zero-length case
 }
 
 // signed area of a triangle
@@ -8107,10 +8127,28 @@ function equals(p1, p2) {
 
 // check if two segments intersect
 function intersects(p1, q1, p2, q2) {
-    if ((equals(p1, q1) && equals(p2, q2)) ||
-        (equals(p1, q2) && equals(p2, q1))) return true;
-    return area(p1, q1, p2) > 0 !== area(p1, q1, q2) > 0 &&
-           area(p2, q2, p1) > 0 !== area(p2, q2, q1) > 0;
+    var o1 = sign(area(p1, q1, p2));
+    var o2 = sign(area(p1, q1, q2));
+    var o3 = sign(area(p2, q2, p1));
+    var o4 = sign(area(p2, q2, q1));
+
+    if (o1 !== o2 && o3 !== o4) return true; // general case
+
+    if (o1 === 0 && onSegment(p1, p2, q1)) return true; // p1, q1 and p2 are collinear and p2 lies on p1q1
+    if (o2 === 0 && onSegment(p1, q2, q1)) return true; // p1, q1 and q2 are collinear and q2 lies on p1q1
+    if (o3 === 0 && onSegment(p2, p1, q2)) return true; // p2, q2 and p1 are collinear and p1 lies on p2q2
+    if (o4 === 0 && onSegment(p2, q1, q2)) return true; // p2, q2 and q1 are collinear and q1 lies on p2q2
+
+    return false;
+}
+
+// for collinear points p, q, r, check if point q lies on segment pr
+function onSegment(p, q, r) {
+    return q.x <= Math.max(p.x, r.x) && q.x >= Math.min(p.x, r.x) && q.y <= Math.max(p.y, r.y) && q.y >= Math.min(p.y, r.y);
+}
+
+function sign(num) {
+    return num > 0 ? 1 : num < 0 ? -1 : 0;
 }
 
 // check if a polygon diagonal intersects any polygon segments
@@ -8139,7 +8177,8 @@ function middleInside(a, b) {
         px = (a.x + b.x) / 2,
         py = (a.y + b.y) / 2;
     do {
-        if (((p.y > py) !== (p.next.y > py)) && (px < (p.next.x - p.x) * (py - p.y) / (p.next.y - p.y) + p.x))
+        if (((p.y > py) !== (p.next.y > py)) && p.next.y !== p.y &&
+                (px < (p.next.x - p.x) * (py - p.y) / (p.next.y - p.y) + p.x))
             inside = !inside;
         p = p.next;
     } while (p !== a);
@@ -8196,14 +8235,14 @@ function removeNode(p) {
 }
 
 function Node(i, x, y) {
-    // vertice index in coordinates array
+    // vertex index in coordinates array
     this.i = i;
 
     // vertex coordinates
     this.x = x;
     this.y = y;
 
-    // previous and next vertice nodes in a polygon ring
+    // previous and next vertex nodes in a polygon ring
     this.prev = null;
     this.next = null;
 
@@ -8273,6 +8312,7 @@ earcut.flatten = function (data) {
     }
     return result;
 };
+earcut_1.default = default_1;
 
 // Polygon builders
 const up_vec3 = [0, 0, 1];
@@ -8286,10 +8326,11 @@ const up_vec3 = [0, 0, 1];
  * @return {number} the number of the resulting geometries (triangles)
  */
 
-function buildPolygons(polygons, vertex_data, vertex_template, _ref) {
-  let texcoord_index = _ref.texcoord_index,
-      texcoord_scale = _ref.texcoord_scale,
-      texcoord_normalize = _ref.texcoord_normalize;
+function buildPolygons(polygons, vertex_data, vertex_template, {
+  texcoord_index,
+  texcoord_scale,
+  texcoord_normalize
+}) {
   let vertex_elements = vertex_data.vertex_elements,
       num_polygons = polygons.length,
       geom_count = 0,
@@ -8308,13 +8349,7 @@ function buildPolygons(polygons, vertex_data, vertex_template, _ref) {
 
   if (texcoord_index) {
     texcoord_normalize = texcoord_normalize || 1;
-
-    var _ref2 = texcoord_scale || default_uvs;
-
-    min_u = _ref2[0];
-    min_v = _ref2[1];
-    max_u = _ref2[2];
-    max_v = _ref2[3];
+    [min_u, min_v, max_u, max_v] = texcoord_scale || default_uvs;
   }
 
   for (let p = 0; p < num_polygons; p++) {
@@ -8326,9 +8361,7 @@ function buildPolygons(polygons, vertex_data, vertex_template, _ref) {
     if (num_indices) {
       // Find polygon extents to calculate UVs, fit them to the axis-aligned bounding box:
       if (texcoord_index) {
-        var _Geo$findBoundingBox;
-
-        (_Geo$findBoundingBox = Geo$1.findBoundingBox(polygon), min_x = _Geo$findBoundingBox[0], min_y = _Geo$findBoundingBox[1], max_x = _Geo$findBoundingBox[2], max_y = _Geo$findBoundingBox[3], _Geo$findBoundingBox), span_x = max_x - min_x, span_y = max_y - min_y, scale_u = (max_u - min_u) / span_x, scale_v = (max_v - min_v) / span_y;
+        [min_x, min_y, max_x, max_y] = Geo$1.findBoundingBox(polygon), span_x = max_x - min_x, span_y = max_y - min_y, scale_u = (max_u - min_u) / span_x, scale_v = (max_v - min_v) / span_y;
       }
 
       for (let ring_index = 0; ring_index < polygon.length; ring_index++) {
@@ -8361,13 +8394,14 @@ function buildPolygons(polygons, vertex_data, vertex_template, _ref) {
   return geom_count;
 } // Tesselate and extrude a flat 2D polygon into a simple 3D model with fixed height and add to GL vertex buffer
 
-function buildExtrudedPolygons(polygons, z, height, min_height, vertex_data, vertex_template, normal_index, normal_normalize, _ref3) {
-  let remove_tile_edges = _ref3.remove_tile_edges,
-      tile_edge_tolerance = _ref3.tile_edge_tolerance,
-      texcoord_index = _ref3.texcoord_index,
-      texcoord_scale = _ref3.texcoord_scale,
-      texcoord_normalize = _ref3.texcoord_normalize,
-      winding = _ref3.winding;
+function buildExtrudedPolygons(polygons, z, height, min_height, vertex_data, vertex_template, normal_index, normal_normalize, {
+  remove_tile_edges,
+  tile_edge_tolerance,
+  texcoord_index,
+  texcoord_scale,
+  texcoord_normalize,
+  winding
+}) {
   // Top
   var min_z = z + (min_height || 0);
   var max_z = z + height;
@@ -8383,13 +8417,7 @@ function buildExtrudedPolygons(polygons, z, height, min_height, vertex_data, ver
 
   if (texcoord_index) {
     texcoord_normalize = texcoord_normalize || 1;
-
-    var _ref4 = texcoord_scale || default_uvs,
-        min_u = _ref4[0],
-        min_v = _ref4[1],
-        max_u = _ref4[2],
-        max_v = _ref4[3];
-
+    var [min_u, min_v, max_u, max_v] = texcoord_scale || default_uvs;
     var texcoords = [[min_u, max_v], [min_u, min_v], [max_u, min_v], [max_u, max_v]];
   }
 
@@ -8460,16 +8488,12 @@ function triangulatePolygon(data) {
   return earcut_1(data.vertices, data.holes, data.dimensions);
 }
 
-var polygons_vs = "uniform vec2 u_resolution;\nuniform float u_time;\nuniform vec3 u_map_position;\nuniform vec4 u_tile_origin;\nuniform float u_tile_proxy_order_offset;\nuniform float u_meters_per_pixel;\nuniform float u_device_pixel_ratio;\n\nuniform mat4 u_model;\nuniform mat4 u_modelView;\nuniform mat3 u_normalMatrix;\nuniform mat3 u_inverseNormalMatrix;\n\nattribute vec4 a_position;\nattribute vec4 a_color;\n\n// Optional normal attribute, otherwise default to up\n#ifdef TANGRAM_NORMAL_ATTRIBUTE\n    attribute vec3 a_normal;\n    #define TANGRAM_NORMAL a_normal\n#else\n    #define TANGRAM_NORMAL vec3(0., 0., 1.)\n#endif\n\n// Optional dynamic line extrusion\n#ifdef TANGRAM_EXTRUDE_LINES\n    attribute vec2 a_extrude; // extrusion direction in xy plane\n    attribute vec2 a_offset;  // offset direction in xy plane\n\n    // Polygon and line styles have slightly different VBO layouts, saving memory by optimizing vertex packing.\n    // All lines have a width scaling factor, but only some have a height (position.z) or offset.\n    // The vertex height is stored in different attributes to account for this.\n    attribute vec2 a_z_and_offset_scale; // stores vertex height in x, and offset scaling factor in y\n    #define TANGRAM_POSITION_Z a_z_and_offset_scale.x // vertex height is stored in separate line-specific attrib\n    #define TANGRAM_OFFSET_SCALING a_z_and_offset_scale.y // zoom scaling factor for line offset\n    #define TANGRAM_WIDTH_SCALING a_position.z // zoom scaling factor for line width (stored in position attrib)\n\n    uniform float u_v_scale_adjust; // scales texture UVs for line dash patterns w/fractional pixel width\n#else\n    #define TANGRAM_POSITION_Z a_position.z // vertex height\n#endif\n\nvarying vec4 v_position;\nvarying vec3 v_normal;\nvarying vec4 v_color;\nvarying vec4 v_world_position;\n\n// Optional texture UVs\n#if defined(TANGRAM_TEXTURE_COORDS) || defined(TANGRAM_EXTRUDE_LINES)\n    attribute vec2 a_texcoord;\n    varying vec2 v_texcoord;\n#endif\n\n// Optional model position varying for tile coordinate zoom\n#ifdef TANGRAM_MODEL_POSITION_BASE_ZOOM_VARYING\n    varying vec4 v_modelpos_base_zoom;\n#endif\n\n#if defined(TANGRAM_LIGHTING_VERTEX)\n    varying vec4 v_lighting;\n#endif\n\n#define TANGRAM_UNPACK_SCALING(x) (x / 1024.)\n\n#pragma tangram: camera\n#pragma tangram: material\n#pragma tangram: lighting\n#pragma tangram: raster\n#pragma tangram: global\n\nvoid main() {\n    // Initialize globals\n    #pragma tangram: setup\n\n    // Texture UVs\n    #ifdef TANGRAM_TEXTURE_COORDS\n        v_texcoord = a_texcoord;\n        #ifdef TANGRAM_EXTRUDE_LINES\n            v_texcoord.y *= u_v_scale_adjust;\n        #endif\n    #endif\n\n    // Pass model position to fragment shader\n    #ifdef TANGRAM_MODEL_POSITION_BASE_ZOOM_VARYING\n        v_modelpos_base_zoom = modelPositionBaseZoom();\n    #endif\n\n    // Position\n    vec4 position = vec4(a_position.xy, TANGRAM_POSITION_Z / TANGRAM_HEIGHT_SCALE, 1.); // convert height back to meters\n\n    #ifdef TANGRAM_EXTRUDE_LINES\n        vec2 _extrude = a_extrude.xy;\n        vec2 _offset = a_offset.xy;\n\n        // Adjust line width based on zoom level, to prevent proxied lines\n        // from being either too small or too big.\n        // \"Flattens\" the zoom between 1-2 to peg it to 1 (keeps lines from\n        // prematurely shrinking), then interpolate and clamp to 4 (keeps lines\n        // from becoming too small when far away).\n        float _dz = clamp(u_map_position.z - u_tile_origin.z, 0., 4.);\n        _dz += step(1., _dz) * (1. - _dz) + mix(0., 2., clamp((_dz - 2.) / 2., 0., 1.));\n\n        // Interpolate line width between zooms\n        float _mdz = (_dz - 0.5) * 2.; // zoom from mid-point\n        _extrude -= _extrude * TANGRAM_UNPACK_SCALING(TANGRAM_WIDTH_SCALING) * _mdz;\n\n        // Interpolate line offset between zooms\n        // Scales from the larger value to the smaller one\n        float _dwdz = TANGRAM_UNPACK_SCALING(TANGRAM_OFFSET_SCALING);\n        float _sdwdz = sign(step(0., _dwdz) - 0.5); // sign indicates \"direction\" of scaling\n        _offset -= _offset * abs(_dwdz) * ((1.-step(0., _sdwdz)) - (_dz * -_sdwdz)); // scale \"up\" or \"down\"\n\n        // Scale line width and offset to be consistent in screen space\n        float _ssz = exp2(-_dz - (u_tile_origin.z - u_tile_origin.w));\n        _extrude *= _ssz;\n        _offset *= _ssz;\n\n        // Modify line width before extrusion\n        #ifdef TANGRAM_BLOCK_WIDTH\n            float width = 1.;\n            #pragma tangram: width\n            _extrude *= width;\n        #endif\n\n        position.xy += _extrude + _offset;\n    #endif\n\n    // World coordinates for 3d procedural textures\n    v_world_position = wrapWorldPosition(u_model * position);\n\n    // Adjust for tile and view position\n    position = u_modelView * position;\n\n    // Modify position before camera projection\n    #pragma tangram: position\n\n    // Setup varyings\n    v_position = position;\n    v_normal = normalize(u_normalMatrix * TANGRAM_NORMAL);\n    v_color = a_color;\n\n    #if defined(TANGRAM_LIGHTING_VERTEX)\n        // Vertex lighting\n        vec3 normal = v_normal;\n\n        // Modify normal before lighting\n        #pragma tangram: normal\n\n        // Pass lighting intensity to fragment shader\n        v_lighting = calculateLighting(position.xyz - u_eye, normal, vec4(1.));\n    #endif\n\n    // Camera\n    cameraProjection(position);\n\n    // +1 is to keep all layers including proxies > 0\n    applyLayerOrder(a_position.w + u_tile_proxy_order_offset + 1., position);\n\n    gl_Position = position;\n}\n";
+var polygons_vs = "uniform vec2 u_resolution;\nuniform float u_time;\nuniform vec3 u_map_position;\nuniform vec4 u_tile_origin;\nuniform float u_tile_proxy_order_offset;\nuniform float u_meters_per_pixel;\nuniform float u_device_pixel_ratio;\n\nuniform mat4 u_model;\nuniform mat4 u_modelView;\nuniform mat3 u_normalMatrix;\nuniform mat3 u_inverseNormalMatrix;\n\nattribute vec4 a_position;\nattribute vec4 a_color;\n\n// Optional normal attribute, otherwise default to up\n#ifdef TANGRAM_NORMAL_ATTRIBUTE\n    attribute vec3 a_normal;\n    #define TANGRAM_NORMAL a_normal\n#else\n    #define TANGRAM_NORMAL vec3(0., 0., 1.)\n#endif\n\n// Optional dynamic line extrusion\n#ifdef TANGRAM_EXTRUDE_LINES\n    attribute vec2 a_extrude; // extrusion direction in xy plane\n    attribute vec2 a_offset;  // offset direction in xy plane\n\n    // Polygon and line styles have slightly different VBO layouts, saving memory by optimizing vertex packing.\n    // All lines have a width scaling factor, but only some have a height (position.z) or offset.\n    // The vertex height is stored in different attributes to account for this.\n    attribute vec2 a_z_and_offset_scale; // stores vertex height in x, and offset scaling factor in y\n    #define TANGRAM_POSITION_Z a_z_and_offset_scale.x // vertex height is stored in separate line-specific attrib\n    #define TANGRAM_OFFSET_SCALING a_z_and_offset_scale.y // zoom scaling factor for line offset\n    #define TANGRAM_WIDTH_SCALING a_position.z // zoom scaling factor for line width (stored in position attrib)\n\n    uniform float u_v_scale_adjust; // scales texture UVs for line dash patterns w/fractional pixel width\n#else\n    #define TANGRAM_POSITION_Z a_position.z // vertex height\n#endif\n\nvarying vec4 v_position;\nvarying vec3 v_normal;\nvarying vec4 v_color;\nvarying vec4 v_world_position;\n\n// Optional texture UVs\n#if defined(TANGRAM_TEXTURE_COORDS) || defined(TANGRAM_EXTRUDE_LINES)\n    attribute vec2 a_texcoord;\n    varying vec2 v_texcoord;\n#endif\n\n// Optional model position varying for tile coordinate zoom\n#ifdef TANGRAM_MODEL_POSITION_BASE_ZOOM_VARYING\n    varying vec4 v_modelpos_base_zoom;\n#endif\n\n#if defined(TANGRAM_LIGHTING_VERTEX)\n    varying vec4 v_lighting;\n#endif\n\n#define TANGRAM_UNPACK_SCALING(x) (x / 1024.)\n\n#pragma tangram: attributes\n#pragma tangram: camera\n#pragma tangram: material\n#pragma tangram: lighting\n#pragma tangram: raster\n#pragma tangram: global\n\nvoid main() {\n    // Initialize globals\n    #pragma tangram: setup\n\n    // Texture UVs\n    #ifdef TANGRAM_TEXTURE_COORDS\n        v_texcoord = a_texcoord;\n        #ifdef TANGRAM_EXTRUDE_LINES\n            v_texcoord.y *= u_v_scale_adjust;\n        #endif\n    #endif\n\n    // Pass model position to fragment shader\n    #ifdef TANGRAM_MODEL_POSITION_BASE_ZOOM_VARYING\n        v_modelpos_base_zoom = modelPositionBaseZoom();\n    #endif\n\n    // Position\n    vec4 position = vec4(a_position.xy, TANGRAM_POSITION_Z / TANGRAM_HEIGHT_SCALE, 1.); // convert height back to meters\n\n    #ifdef TANGRAM_EXTRUDE_LINES\n        vec2 _extrude = a_extrude.xy;\n        vec2 _offset = a_offset.xy;\n\n        // Adjust line width based on zoom level, to prevent proxied lines\n        // from being either too small or too big.\n        // \"Flattens\" the zoom between 1-2 to peg it to 1 (keeps lines from\n        // prematurely shrinking), then interpolate and clamp to 4 (keeps lines\n        // from becoming too small when far away).\n        float _dz = clamp(u_map_position.z - u_tile_origin.z, 0., 4.);\n        _dz += step(1., _dz) * (1. - _dz) + mix(0., 2., clamp((_dz - 2.) / 2., 0., 1.));\n\n        // Interpolate line width between zooms\n        float _mdz = (_dz - 0.5) * 2.; // zoom from mid-point\n        _extrude -= _extrude * TANGRAM_UNPACK_SCALING(TANGRAM_WIDTH_SCALING) * _mdz;\n\n        // Interpolate line offset between zooms\n        // Scales from the larger value to the smaller one\n        float _dwdz = TANGRAM_UNPACK_SCALING(TANGRAM_OFFSET_SCALING);\n        float _sdwdz = sign(step(0., _dwdz) - 0.5); // sign indicates \"direction\" of scaling\n        _offset -= _offset * abs(_dwdz) * ((1.-step(0., _sdwdz)) - (_dz * -_sdwdz)); // scale \"up\" or \"down\"\n\n        // Scale line width and offset to be consistent in screen space\n        float _ssz = exp2(-_dz - (u_tile_origin.z - u_tile_origin.w));\n        _extrude *= _ssz;\n        _offset *= _ssz;\n\n        // Modify line width before extrusion\n        #ifdef TANGRAM_BLOCK_WIDTH\n            float width = 1.;\n            #pragma tangram: width\n            _extrude *= width;\n        #endif\n\n        position.xy += _extrude + _offset;\n    #endif\n\n    // World coordinates for 3d procedural textures\n    v_world_position = wrapWorldPosition(u_model * position);\n\n    // Adjust for tile and view position\n    position = u_modelView * position;\n\n    // Modify position before camera projection\n    #pragma tangram: position\n\n    // Setup varyings\n    v_position = position;\n    v_normal = normalize(u_normalMatrix * TANGRAM_NORMAL);\n    v_color = a_color;\n\n    #if defined(TANGRAM_LIGHTING_VERTEX)\n        // Vertex lighting\n        vec3 normal = v_normal;\n\n        // Modify normal before lighting\n        #pragma tangram: normal\n\n        // Pass lighting intensity to fragment shader\n        v_lighting = calculateLighting(position.xyz - u_eye, normal, vec4(1.));\n    #endif\n\n    // Camera\n    cameraProjection(position);\n\n    // +1 is to keep all layers including proxies > 0\n    applyLayerOrder(a_position.w + u_tile_proxy_order_offset + 1., position);\n\n    gl_Position = position;\n}\n";
 
-var polygons_fs = "uniform vec2 u_resolution;\nuniform float u_time;\nuniform vec3 u_map_position;\nuniform vec4 u_tile_origin;\nuniform float u_meters_per_pixel;\nuniform float u_device_pixel_ratio;\n\nuniform mat3 u_normalMatrix;\nuniform mat3 u_inverseNormalMatrix;\n\nvarying vec4 v_position;\nvarying vec3 v_normal;\nvarying vec4 v_color;\nvarying vec4 v_world_position;\n\n#ifdef TANGRAM_EXTRUDE_LINES\n    uniform bool u_has_line_texture;\n    uniform sampler2D u_texture;\n    uniform float u_texture_ratio;\n    uniform vec4 u_dash_background_color;\n#endif\n\n#define TANGRAM_NORMAL v_normal\n\n#if defined(TANGRAM_TEXTURE_COORDS) || defined(TANGRAM_EXTRUDE_LINES)\n    varying vec2 v_texcoord;\n#endif\n\n#ifdef TANGRAM_MODEL_POSITION_BASE_ZOOM_VARYING\n    varying vec4 v_modelpos_base_zoom;\n#endif\n\n#if defined(TANGRAM_LIGHTING_VERTEX)\n    varying vec4 v_lighting;\n#endif\n\n#pragma tangram: camera\n#pragma tangram: material\n#pragma tangram: lighting\n#pragma tangram: raster\n#pragma tangram: global\n\nvoid main (void) {\n    // Initialize globals\n    #pragma tangram: setup\n\n    vec4 color = v_color;\n    vec3 normal = TANGRAM_NORMAL;\n\n    // Apply raster to vertex color\n    #ifdef TANGRAM_RASTER_TEXTURE_COLOR\n        vec4 _raster_color = sampleRaster(0);\n\n        #if defined(TANGRAM_BLEND_OPAQUE) || defined(TANGRAM_BLEND_TRANSLUCENT) || defined(TANGRAM_BLEND_MULTIPLY)\n            // Raster sources can optionally mask by the alpha channel, which will render with only full or no alpha.\n            // This is used for handling transparency outside the raster image in some blend modes,\n            // which either don't support alpha, or would cause transparent pixels to write to the depth buffer,\n            // obscuring geometry underneath.\n            #ifdef TANGRAM_HAS_MASKED_RASTERS   // skip masking logic if no masked raster sources\n            #ifndef TANGRAM_ALL_MASKED_RASTERS  // skip conditional if *only* masked raster sources (always true)\n            if (u_raster_mask_alpha) {\n            #else\n            {\n            #endif\n                #if defined(TANGRAM_BLEND_TRANSLUCENT) || defined(TANGRAM_BLEND_MULTIPLY)\n                if (_raster_color.a < TANGRAM_EPSILON) {\n                    discard;\n                }\n                #else // TANGRAM_BLEND_OPAQUE\n                if (_raster_color.a < 1. - TANGRAM_EPSILON) {\n                    discard;\n                }\n                // only allow full alpha in opaque blend mode (avoids artifacts blending w/canvas tile background)\n                _raster_color.a = 1.;\n                #endif\n            }\n            #endif\n        #endif\n\n        color *= _raster_color; // multiplied to tint texture color\n    #endif\n\n    // Apply line texture\n    #ifdef TANGRAM_EXTRUDE_LINES\n    { // enclose in scope to avoid leakage of internal variables\n        if (u_has_line_texture) {\n            vec2 _line_st = vec2(v_texcoord.x, fract(v_texcoord.y / u_texture_ratio));\n            vec4 _line_color = texture2D(u_texture, _line_st);\n\n            if (_line_color.a < TANGRAM_ALPHA_TEST) {\n                #if defined(TANGRAM_BLEND_OPAQUE)\n                    // use discard when alpha blending is unavailable\n                    if (u_dash_background_color.a < 1. - TANGRAM_EPSILON) {\n                        discard;\n                    }\n                    color = vec4(u_dash_background_color.rgb, 1.); // only allow full alpha in opaque blend mode\n                #else\n                    // use alpha channel when blending is available\n                    color = vec4(u_dash_background_color.rgb, color.a * step(TANGRAM_EPSILON, u_dash_background_color.a));\n                #endif\n            }\n            else {\n                color *= _line_color;\n            }\n        }\n    }\n    #endif\n\n    // First, get normal from raster tile (if applicable)\n    #ifdef TANGRAM_RASTER_TEXTURE_NORMAL\n        normal = normalize(sampleRaster(0).rgb * 2. - 1.);\n    #endif\n\n    // Second, alter normal with normal map texture (if applicable)\n    #if defined(TANGRAM_LIGHTING_FRAGMENT) && defined(TANGRAM_MATERIAL_NORMAL_TEXTURE)\n        calculateNormal(normal);\n    #endif\n\n    // Normal modification applied here for fragment lighting or no lighting,\n    // and in vertex shader for vertex lighting\n    #if !defined(TANGRAM_LIGHTING_VERTEX)\n        #pragma tangram: normal\n    #endif\n\n    // Color modification before lighting is applied\n    #pragma tangram: color\n\n    #if defined(TANGRAM_LIGHTING_FRAGMENT)\n        // Calculate per-fragment lighting\n        color = calculateLighting(v_position.xyz - u_eye, normal, color);\n    #elif defined(TANGRAM_LIGHTING_VERTEX)\n        // Apply lighting intensity interpolated from vertex shader\n        color *= v_lighting;\n    #endif\n\n    // Post-processing effects (modify color after lighting)\n    #pragma tangram: filter\n\n    gl_FragColor = color;\n}\n";
+var polygons_fs = "uniform vec2 u_resolution;\nuniform float u_time;\nuniform vec3 u_map_position;\nuniform vec4 u_tile_origin;\nuniform float u_meters_per_pixel;\nuniform float u_device_pixel_ratio;\n\nuniform mat3 u_normalMatrix;\nuniform mat3 u_inverseNormalMatrix;\n\nvarying vec4 v_position;\nvarying vec3 v_normal;\nvarying vec4 v_color;\nvarying vec4 v_world_position;\n\n#ifdef TANGRAM_EXTRUDE_LINES\n    uniform bool u_has_line_texture;\n    uniform sampler2D u_texture;\n    uniform float u_texture_ratio;\n    uniform vec4 u_dash_background_color;\n    uniform float u_has_dash;\n#endif\n\n#define TANGRAM_NORMAL v_normal\n\n#if defined(TANGRAM_TEXTURE_COORDS) || defined(TANGRAM_EXTRUDE_LINES)\n    varying vec2 v_texcoord;\n#endif\n\n#ifdef TANGRAM_MODEL_POSITION_BASE_ZOOM_VARYING\n    varying vec4 v_modelpos_base_zoom;\n#endif\n\n#if defined(TANGRAM_LIGHTING_VERTEX)\n    varying vec4 v_lighting;\n#endif\n\n#pragma tangram: attributes\n#pragma tangram: camera\n#pragma tangram: material\n#pragma tangram: lighting\n#pragma tangram: raster\n#pragma tangram: global\n\nvoid main (void) {\n    // Initialize globals\n    #pragma tangram: setup\n\n    vec4 color = v_color;\n    vec3 normal = TANGRAM_NORMAL;\n\n    // Apply raster to vertex color\n    #ifdef TANGRAM_RASTER_TEXTURE_COLOR\n        vec4 _raster_color = sampleRaster(0);\n\n        #if defined(TANGRAM_BLEND_OPAQUE) || defined(TANGRAM_BLEND_TRANSLUCENT) || defined(TANGRAM_BLEND_MULTIPLY)\n            // Raster sources can optionally mask by the alpha channel, which will render with only full or no alpha.\n            // This is used for handling transparency outside the raster image in some blend modes,\n            // which either don't support alpha, or would cause transparent pixels to write to the depth buffer,\n            // obscuring geometry underneath.\n            #ifdef TANGRAM_HAS_MASKED_RASTERS   // skip masking logic if no masked raster sources\n            #ifndef TANGRAM_ALL_MASKED_RASTERS  // skip source check for masking if *all* raster sources are masked\n            if (u_raster_mask_alpha) {\n            #else\n            {\n            #endif\n                #if defined(TANGRAM_BLEND_TRANSLUCENT) || defined(TANGRAM_BLEND_MULTIPLY)\n                if (_raster_color.a < TANGRAM_EPSILON) {\n                    discard;\n                }\n                #else // TANGRAM_BLEND_OPAQUE\n                if (_raster_color.a < 1. - TANGRAM_EPSILON) {\n                    discard;\n                }\n                // only allow full alpha in opaque blend mode (avoids artifacts blending w/canvas tile background)\n                _raster_color.a = 1.;\n                #endif\n            }\n            #endif\n        #endif\n\n        color *= _raster_color; // multiplied to tint texture color\n    #endif\n\n    // Apply line texture\n    #ifdef TANGRAM_EXTRUDE_LINES\n    { // enclose in scope to avoid leakage of internal variables\n        if (u_has_line_texture) {\n            vec2 _line_st = vec2(v_texcoord.x, fract(v_texcoord.y / u_texture_ratio));\n            vec4 _line_color = texture2D(u_texture, _line_st);\n\n            // If the line has a dash pattern, the line texture indicates if the current fragment should be\n            // the dash foreground or background color. If the line doesn't have a dash pattern,\n            // the line texture color is used directly (but also tinted by the vertex color).\n            color = mix(\n                color * _line_color, // no dash: tint the line texture with the vertex color\n                mix(u_dash_background_color, color, _line_color.a), // choose dash foreground or background color\n                u_has_dash // 0 if no dash, 1 if has dash\n            );\n\n            // Use alpha discard test as a lower-quality substitute for blending\n            #if defined(TANGRAM_BLEND_OPAQUE)\n                if (color.a < TANGRAM_ALPHA_TEST) {\n                    discard;\n                }\n            #endif\n        }\n    }\n    #endif\n\n    // First, get normal from raster tile (if applicable)\n    #ifdef TANGRAM_RASTER_TEXTURE_NORMAL\n        normal = normalize(sampleRaster(0).rgb * 2. - 1.);\n    #endif\n\n    // Second, alter normal with normal map texture (if applicable)\n    #if defined(TANGRAM_LIGHTING_FRAGMENT) && defined(TANGRAM_MATERIAL_NORMAL_TEXTURE)\n        calculateNormal(normal);\n    #endif\n\n    // Normal modification applied here for fragment lighting or no lighting,\n    // and in vertex shader for vertex lighting\n    #if !defined(TANGRAM_LIGHTING_VERTEX)\n        #pragma tangram: normal\n    #endif\n\n    // Color modification before lighting is applied\n    #pragma tangram: color\n\n    #if defined(TANGRAM_LIGHTING_FRAGMENT)\n        // Calculate per-fragment lighting\n        color = calculateLighting(v_position.xyz - u_eye, normal, color);\n    #elif defined(TANGRAM_LIGHTING_VERTEX)\n        // Apply lighting intensity interpolated from vertex shader\n        color *= v_lighting;\n    #endif\n\n    // Post-processing effects (modify color after lighting)\n    #pragma tangram: filter\n\n    gl_FragColor = color;\n}\n";
 
 // Polygon rendering style
 const Polygons = Object.create(Style);
-Polygons.variants = {}; // mesh variants by variant key
-
-Polygons.vertex_layouts = {}; // vertex layouts by variant key
-
 Object.assign(Polygons, {
   name: 'polygons',
   built_in: true,
@@ -8492,6 +8516,8 @@ Object.assign(Polygons, {
     if (!style.color) {
       return null;
     }
+
+    style.alpha = StyleParser.evalCachedProperty(draw.alpha, context); // optional alpha override
 
     style.variant = draw.variant; // pre-calculated mesh variant
 
@@ -8527,6 +8553,7 @@ Object.assign(Polygons, {
 
   _preprocess(draw) {
     draw.color = StyleParser.createColorPropertyCache(draw.color);
+    draw.alpha = StyleParser.createPropertyCache(draw.alpha);
     draw.z = StyleParser.createPropertyCache(draw.z, StyleParser.parseUnits);
     this.computeVariant(draw);
     return draw;
@@ -8545,8 +8572,8 @@ Object.assign(Polygons, {
     const key = [selection, normal, texcoords, blend_order].join('/');
     draw.variant = key;
 
-    if (Polygons.variants[key] == null) {
-      Polygons.variants[key] = {
+    if (this.variants[key] == null) {
+      this.variants[key] = {
         key,
         blend_order,
         mesh_order: 0,
@@ -8560,7 +8587,7 @@ Object.assign(Polygons, {
   // Override
   // Create or return desired vertex layout permutation based on flags
   vertexLayoutForMeshVariant(variant) {
-    if (Polygons.vertex_layouts[variant.key] == null) {
+    if (this.vertex_layouts[variant.key] == null) {
       // Attributes for this mesh variant
       // Optional attributes have placeholder values assigned with `static` parameter
       const attribs = [{
@@ -8593,10 +8620,11 @@ Object.assign(Polygons, {
         normalized: true,
         static: variant.texcoords ? null : [0, 0]
       }];
-      Polygons.vertex_layouts[variant.key] = new VertexLayout(attribs);
+      this.addCustomAttributesToAttributeList(attribs);
+      this.vertex_layouts[variant.key] = new VertexLayout(attribs);
     }
 
-    return Polygons.vertex_layouts[variant.key];
+    return this.vertex_layouts[variant.key];
   },
 
   // Override
@@ -8628,7 +8656,7 @@ Object.assign(Polygons, {
     this.vertex_template[i++] = style.color[0] * 255;
     this.vertex_template[i++] = style.color[1] * 255;
     this.vertex_template[i++] = style.color[2] * 255;
-    this.vertex_template[i++] = style.color[3] * 255; // a_selection_color.rgba - selection color
+    this.vertex_template[i++] = (style.alpha != null ? style.alpha : style.color[3]) * 255; // a_selection_color.rgba - selection color
 
     if (mesh.variant.selection) {
       this.vertex_template[i++] = style.selection_color[0] * 255;
@@ -8643,6 +8671,7 @@ Object.assign(Polygons, {
       this.vertex_template[i++] = 0;
     }
 
+    this.addCustomAttributesToVertexTemplate(style, i);
     return this.vertex_template;
   },
 
@@ -8753,13 +8782,15 @@ function buildPolyline(line, context) {
   }
 
   var coordCurr, coordNext, normPrev, normNext;
-  var join_type = context.join_type,
-      cap_type = context.cap_type,
-      closed_polygon = context.closed_polygon,
-      remove_tile_edges = context.remove_tile_edges,
-      tile_edge_tolerance = context.tile_edge_tolerance,
-      v_scale = context.v_scale,
-      miter_len_sq = context.miter_len_sq;
+  var {
+    join_type,
+    cap_type,
+    closed_polygon,
+    remove_tile_edges,
+    tile_edge_tolerance,
+    v_scale,
+    miter_len_sq
+  } = context;
   var has_texcoord = context.texcoord_index != null;
   var v = 0; // Texture v-coordinate
   // Loop backwards through line to a tile boundary if found
@@ -9303,11 +9334,7 @@ function permuteLine(line, startIndex) {
 // https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D/setLineDash
 const default_dash_color = [255, 255, 255, 255];
 const default_background_color = [0, 0, 0, 0];
-function renderDashArray(pattern, options) {
-  if (options === void 0) {
-    options = {};
-  }
-
+function renderDashArray(pattern, options = {}) {
   const dash_pixel = options.dash_color || default_dash_color;
   const background_color = options.background_color || default_background_color;
   const dashes = pattern;
@@ -9344,10 +9371,6 @@ function renderDashArray(pattern, options) {
 
 // Line rendering style
 const Lines = Object.create(Style);
-Lines.variants = {}; // mesh variants by variant key
-
-Lines.vertex_layouts = {}; // vertex layouts by variant key
-
 const DASH_SCALE = 20; // adjustment factor for UV scale to for line dash patterns w/fractional pixel width
 
 Object.assign(Lines, {
@@ -9497,6 +9520,8 @@ Object.assign(Lines, {
       return;
     }
 
+    style.alpha = StyleParser.evalCachedProperty(draw.alpha, context); // optional alpha override
+
     style.variant = draw.variant; // pre-calculated mesh variant
     // height defaults to feature height, but extrude style can dynamically adjust height by returning a number or array (instead of a boolean)
 
@@ -9552,14 +9577,16 @@ Object.assign(Lines, {
         style.outline.inline_texcoord_width = style.texcoord_width; // Offset is directly copied from fill to outline, no need to re-calculate it
 
         style.outline.offset_precalc = style.offset;
-        style.outline.offset_scale_precalc = style.offset_scale; // Inherited properties
-
+        style.outline.offset_scale_precalc = style.offset_scale;
         style.outline.color = draw.outline.color;
+        style.outline.alpha = draw.outline.alpha;
         style.outline.interactive = draw.outline.interactive;
         style.outline.cap = draw.outline.cap;
         style.outline.join = draw.outline.join;
         style.outline.miter_limit = draw.outline.miter_limit;
         style.outline.texcoords = draw.outline.texcoords;
+        style.outline.extrude = draw.outline.extrude;
+        style.outline.z = draw.outline.z;
         style.outline.style = draw.outline.style;
         style.outline.variant = draw.outline.variant; // Explicitly defined outline order, or inherited from inner line
 
@@ -9589,6 +9616,7 @@ Object.assign(Lines, {
 
   _preprocess(draw) {
     draw.color = StyleParser.createColorPropertyCache(draw.color);
+    draw.alpha = StyleParser.createPropertyCache(draw.alpha);
     draw.width = StyleParser.createPropertyCache(draw.width, StyleParser.parseUnits);
 
     if (draw.width && draw.width.type !== StyleParser.CACHE_TYPE.STATIC) {
@@ -9615,15 +9643,18 @@ Object.assign(Lines, {
 
       draw.outline.style = draw.outline.style || this.name;
       draw.outline.color = StyleParser.createColorPropertyCache(draw.outline.color);
+      draw.outline.alpha = StyleParser.createPropertyCache(draw.outline.alpha);
       draw.outline.width = StyleParser.createPropertyCache(draw.outline.width, StyleParser.parseUnits);
       draw.outline.next_width = StyleParser.createPropertyCache(draw.outline.width, StyleParser.parseUnits); // width re-computed for next zoom
 
       draw.outline.interactive = draw.outline.interactive != null ? draw.outline.interactive : draw.interactive;
       draw.outline.cap = draw.outline.cap || draw.cap;
       draw.outline.join = draw.outline.join || draw.join;
-      draw.outline.miter_limit = draw.outline.miter_limit != null ? draw.outline.miter_limit : draw.miter_limit;
-      draw.outline.offset = draw.offset; // always apply inline offset to outline
-      // outline inhertits dash pattern, but NOT explicit texture
+      draw.outline.miter_limit = draw.outline.miter_limit != null ? draw.outline.miter_limit : draw.miter_limit; // always apply inline values for offset and extrusion/height to outline
+
+      draw.outline.offset = draw.offset;
+      draw.outline.extrude = draw.extrude;
+      draw.outline.z = draw.z; // outline inherits dash pattern, but NOT explicit texture
 
       let outline_style = this.styles[draw.outline.style];
 
@@ -9660,7 +9691,7 @@ Object.assign(Lines, {
           draw.outline.blend_order = draw.blend_order;
         }
 
-        this.computeVariant(draw.outline, outline_style);
+        outline_style.computeVariant(draw.outline);
       } else {
         log({
           level: 'warn',
@@ -9718,6 +9749,7 @@ Object.assign(Lines, {
 
           if (variant.dash) {
             uniforms.u_v_scale_adjust = Geo$1.tile_scale * DASH_SCALE;
+            uniforms.u_has_dash = variant.dash_background_color != null ? 1 : 0;
             uniforms.u_dash_background_color = variant.dash_background_color || [0, 0, 0, 0];
           }
 
@@ -9753,11 +9785,7 @@ Object.assign(Lines, {
   },
 
   // Calculate and store mesh variant (unique by draw group but not feature)
-  computeVariant(draw, style) {
-    if (style === void 0) {
-      style = this;
-    }
-
+  computeVariant(draw) {
     // Factors that determine a unique mesh rendering variant
     let key = draw.offset ? 1 : 0; // whether feature has a line offset
 
@@ -9783,14 +9811,14 @@ Object.assign(Lines, {
       key += draw.texture_merged;
     }
 
-    const blend_order = style.getBlendOrderForDraw(draw);
+    const blend_order = this.getBlendOrderForDraw(draw);
     key += '/' + blend_order; // Create unique key
 
     key = hashString(key);
     draw.variant = key;
 
-    if (Lines.variants[key] == null) {
-      Lines.variants[key] = {
+    if (this.variants[key] == null) {
+      this.variants[key] = {
         key,
         blend_order,
         mesh_order: draw.is_outline ? 0 : 1,
@@ -9810,7 +9838,7 @@ Object.assign(Lines, {
   // Override
   // Create or return desired vertex layout permutation based on flags
   vertexLayoutForMeshVariant(variant) {
-    if (Lines.vertex_layouts[variant.key] == null) {
+    if (this.vertex_layouts[variant.key] == null) {
       // Attributes for this mesh variant
       // Optional attributes have placeholder values assigned with `static` parameter
       const attribs = [{
@@ -9853,15 +9881,16 @@ Object.assign(Lines, {
         normalized: true,
         static: variant.selection ? null : [0, 0, 0, 0]
       }];
-      Lines.vertex_layouts[variant.key] = new VertexLayout(attribs);
+      this.addCustomAttributesToAttributeList(attribs);
+      this.vertex_layouts[variant.key] = new VertexLayout(attribs);
     }
 
-    return Lines.vertex_layouts[variant.key];
+    return this.vertex_layouts[variant.key];
   },
 
   // Override
   meshVariantTypeForDraw(draw) {
-    return Lines.variants[draw.variant]; // return pre-calculated mesh variant
+    return this.variants[draw.variant]; // return pre-calculated mesh variant
   },
 
   /**
@@ -9904,7 +9933,7 @@ Object.assign(Lines, {
     this.vertex_template[i++] = style.color[0] * 255;
     this.vertex_template[i++] = style.color[1] * 255;
     this.vertex_template[i++] = style.color[2] * 255;
-    this.vertex_template[i++] = style.color[3] * 255; // a_selection_color.rgba - selection color
+    this.vertex_template[i++] = (style.alpha != null ? style.alpha : style.color[3]) * 255; // a_selection_color.rgba - selection color
 
     if (mesh.variant.selection) {
       this.vertex_template[i++] = style.selection_color[0] * 255;
@@ -9913,6 +9942,7 @@ Object.assign(Lines, {
       this.vertex_template[i++] = style.selection_color[3] * 255;
     }
 
+    this.addCustomAttributesToVertexTemplate(style, i);
     return this.vertex_template;
   },
 
@@ -10047,11 +10077,7 @@ const rights = ['right', 'top-right', 'bottom-right'];
 const tops = ['top', 'top-left', 'top-right'];
 const bottoms = ['bottom', 'bottom-left', 'bottom-right'];
 const PointAnchor = {
-  computeOffset(offset, size, anchor, buffer) {
-    if (buffer === void 0) {
-      buffer = null;
-    }
-
+  computeOffset(offset, size, anchor, buffer = null) {
     if (!anchor || anchor === 'center') {
       return offset;
     }
@@ -10265,11 +10291,7 @@ class OBB {
 }
 
 class Label {
-  constructor(size, layout) {
-    if (layout === void 0) {
-      layout = {};
-    }
-
+  constructor(size, layout = {}) {
     this.id = Label.nextLabelId();
     this.type = ''; // set by subclass
 
@@ -10309,11 +10331,7 @@ class Label {
   } // check for overlaps with other labels in the tile
 
 
-  occluded(bboxes, exclude) {
-    if (exclude === void 0) {
-      exclude = null;
-    }
-
+  occluded(bboxes, exclude = null) {
     let intersect = false;
     let aabbs = bboxes.aabb;
     let obbs = bboxes.obb; // Broad phase
@@ -10373,11 +10391,7 @@ class Label {
   // Depends on whether label must fit in the tile bounds, and if so, can it be moved to fit there
 
 
-  discard(bboxes, exclude) {
-    if (exclude === void 0) {
-      exclude = null;
-    }
-
+  discard(bboxes, exclude = null) {
     if (this.throw_away) {
       return true;
     }
@@ -10541,13 +10555,10 @@ const Collision = {
     }
   },
 
-  startTile(tile, _temp) {
-    let _ref = _temp === void 0 ? {} : _temp,
-        _ref$apply_repeat_gro = _ref.apply_repeat_groups,
-        apply_repeat_groups = _ref$apply_repeat_gro === void 0 ? true : _ref$apply_repeat_gro,
-        _ref$return_hidden = _ref.return_hidden,
-        return_hidden = _ref$return_hidden === void 0 ? false : _ref$return_hidden;
-
+  startTile(tile, {
+    apply_repeat_groups = true,
+    return_hidden = false
+  } = {}) {
     let state = this.tiles[tile] = {
       bboxes: {
         // current set of placed bounding boxes
@@ -10718,15 +10729,9 @@ const Collision = {
   },
 
   // Run collision and repeat check to see if label can currently be placed
-  canBePlaced(object, tile, exclude, _temp2) {
-    if (exclude === void 0) {
-      exclude = null;
-    }
-
-    let _ref2 = _temp2 === void 0 ? {} : _temp2,
-        _ref2$repeat = _ref2.repeat,
-        repeat = _ref2$repeat === void 0 ? true : _ref2$repeat;
-
+  canBePlaced(object, tile, exclude = null, {
+    repeat = true
+  } = {}) {
     let label = object.label;
     let layout = object.label.layout; // Skip if already processed (e.g. by parent object)
 
@@ -10768,11 +10773,11 @@ const Collision = {
   },
 
   // Place label
-  place(_ref3, tile, _ref4) {
-    let label = _ref3.label;
-    let _ref4$repeat = _ref4.repeat,
-        repeat = _ref4$repeat === void 0 ? true : _ref4$repeat;
-
+  place({
+    label
+  }, tile, {
+    repeat = true
+  }) {
     // Skip if already processed (e.g. by parent object)
     if (label.placed != null) {
       return;
@@ -10793,11 +10798,7 @@ const Collision = {
 };
 
 class LabelPoint extends Label {
-  constructor(position, size, layout, angle) {
-    if (angle === void 0) {
-      angle = 0;
-    }
-
+  constructor(position, size, layout, angle = 0) {
     super(size, layout);
     this.type = 'point';
     this.position = [position[0], position[1]];
@@ -10862,11 +10863,7 @@ class LabelPoint extends Label {
     }
   }
 
-  discard(bboxes, exclude) {
-    if (exclude === void 0) {
-      exclude = null;
-    }
-
+  discard(bboxes, exclude = null) {
     if (this.degenerate) {
       return false;
     }
@@ -10939,8 +10936,9 @@ function placePointsOnLine(line, size, layout) {
       q = line[i + 1];
 
       if (layout.tile_edges === true || !isCoordOutsideTile(p)) {
-        const angle = getAngle(p, q, layout.angle);
-        labels.push(new LabelPoint(p, size, layout, angle));
+        const _angle = getAngle(p, q, layout.angle);
+
+        labels.push(new LabelPoint(p, size, layout, _angle));
       }
     } // add last endpoint
 
@@ -10981,9 +10979,10 @@ function getPositionsAndAngles(line, min_length, layout) {
   let distance = 0.5 * remainder;
 
   for (let i = 0; i < num_labels; i++) {
-    let _interpolateLine = interpolateLine(line, distance, min_length, layout),
-        position = _interpolateLine.position,
-        angle = _interpolateLine.angle;
+    let {
+      position,
+      angle
+    } = interpolateLine(line, distance, min_length, layout);
 
     if (position != null && angle != null) {
       positions.push(position);
@@ -10999,11 +10998,7 @@ function getPositionsAndAngles(line, min_length, layout) {
   };
 }
 
-function getAngle(p, q, angle) {
-  if (angle === void 0) {
-    angle = 0;
-  }
-
+function getAngle(p, q, angle = 0) {
   return angle === 'auto' ? Math.atan2(q[0] - p[0], q[1] - p[1]) : angle;
 }
 
@@ -11060,38 +11055,79 @@ function interpolateSegment(p, q, distance) {
 const TextSettings = {
   // A key for grouping all labels of the same text style (e.g. same Canvas state, to minimize state changes)
   key(settings) {
-    return [settings.style, settings.weight, settings.family, settings.px_size, settings.fill, settings.stroke, settings.stroke_width, settings.transform, settings.text_wrap, settings.max_lines, settings.supersample, Utils.device_pixel_ratio].join('/');
+    return [settings.style, settings.weight, settings.family, settings.px_size, settings.fill, settings.stroke, settings.stroke_width, settings.underline_width, settings.background_color, settings.background_width, settings.background_stroke_color, settings.background_stroke_width, settings.transform, settings.text_wrap, settings.max_lines, settings.supersample, Utils.device_pixel_ratio].join('/');
   },
 
   defaults: {
     style: 'normal',
-    weight: null,
+    weight: 'normal',
     size: '12px',
     px_size: 12,
     family: 'Helvetica',
-    fill: 'white',
+    fill: [1, 1, 1, 1],
     text_wrap: 15,
     max_lines: 5,
-    align: 'center',
-    stroke: null,
-    stroke_width: 0
+    align: 'center'
   },
 
-  compute(feature, draw, context) {
-    let style = {};
-    draw.font = draw.font || this.defaults; // LineString labels can articulate while point labels cannot. Needed for future texture coordinate calculations.
+  compute(draw, context) {
+    const style = {};
+    draw.font = draw.font || this.defaults;
+    style.supersample = draw.supersample_text ? 1.5 : 1; // optionally render text at 150% to improve clarity
+    // LineString labels can articulate while point labels cannot. Needed for future texture coordinate calculations.
 
-    style.can_articulate = draw.can_articulate; // Use fill if specified, or default
+    style.can_articulate = draw.can_articulate; // Text fill
 
-    style.fill = draw.font.fill && Utils.toCSSColor(StyleParser.evalCachedColorProperty(draw.font.fill, context)) || this.defaults.fill; // Font properties are modeled after CSS names:
+    style.fill = StyleParser.evalCachedColorPropertyWithAlpha(draw.font.fill, draw.font.alpha, context);
+    style.fill = Utils.toCSSColor(style.fill); // convert to CSS for Canvas
+    // Text stroke
+
+    if (draw.font.stroke && draw.font.stroke.color) {
+      style.stroke = StyleParser.evalCachedColorPropertyWithAlpha(draw.font.stroke.color, draw.font.stroke.alpha, context);
+      style.stroke = Utils.toCSSColor(style.stroke); // convert to CSS for Canvas
+
+      style.stroke_width = StyleParser.evalCachedProperty(draw.font.stroke.width, context);
+    } // Text underline
+
+
+    if (draw.font.underline === true && !style.can_articulate) {
+      style.underline_width = 1.5 * style.supersample;
+    } // Background box
+
+
+    if (draw.font.background && !style.can_articulate) {
+      // supported for point labels only
+      // Background fill
+      style.background_color = StyleParser.evalCachedColorPropertyWithAlpha(draw.font.background.color, draw.font.background.alpha, context);
+      style.background_color = Utils.toCSSColor(style.background_color); // convert to CSS for Canvas
+
+      if (style.background_color) {
+        style.background_width = StyleParser.evalCachedProperty(draw.font.background.width, context);
+      } // Background stroke
+
+
+      style.background_stroke_color = draw.font.background.stroke && draw.font.background.stroke.color && StyleParser.evalCachedColorPropertyWithAlpha(draw.font.background.stroke.color, draw.font.background.stroke.alpha, context);
+
+      if (style.background_stroke_color) {
+        style.background_stroke_color = Utils.toCSSColor(style.background_stroke_color); // convert to CSS for Canvas
+        // default background stroke to 1px when stroke color but no stroke width specified
+
+        style.background_stroke_width = draw.font.background.stroke.width != null ? StyleParser.evalCachedProperty(draw.font.background.stroke.width, context) : 1;
+      }
+    } // Font properties are modeled after CSS names:
     // - family: Helvetica, Futura, etc.
     // - size: in pt, px, or em
     // - style: normal, italic, oblique
     // - weight: normal, bold, etc.
     // - transform: capitalize, uppercase, lowercase
+    // clamp weight to 1-1000 (see https://drafts.csswg.org/css-fonts-4/#valdef-font-weight-number)
 
-    style.style = draw.font.style || this.defaults.style;
-    style.weight = draw.font.weight || this.defaults.weight;
+
+    style.weight = StyleParser.evalCachedProperty(draw.font.weight, context) || this.defaults.weight;
+
+    if (typeof style.weight === 'number') {
+      style.weight = Math.min(Math.max(style.weight, 1), 1000);
+    }
 
     if (draw.font.family) {
       style.family = draw.font.family;
@@ -11103,23 +11139,16 @@ const TextSettings = {
       style.family = this.defaults.family;
     }
 
+    style.style = draw.font.style || this.defaults.style;
     style.transform = draw.font.transform; // calculated pixel size
 
-    style.supersample = draw.supersample_text ? 1.5 : 1; // optionally render text at 150% to improve clarity
-
-    style.px_size = StyleParser.evalCachedProperty(draw.font.px_size, context) * style.supersample; // Use stroke if specified
-
-    if (draw.font.stroke && draw.font.stroke.color) {
-      style.stroke = Utils.toCSSColor(StyleParser.evalCachedColorProperty(draw.font.stroke.color, context) || this.defaults.stroke);
-      style.stroke_width = StyleParser.evalCachedProperty(draw.font.stroke.width, context) || this.defaults.stroke_width;
-    }
-
+    style.px_size = StyleParser.evalCachedProperty(draw.font.px_size, context) * style.supersample;
     style.font_css = this.fontCSS(style); // Word wrap and text alignment
     // Not a font properties, but affect atlas of unique text textures
 
     let text_wrap = draw.text_wrap; // use explicitly set value
 
-    if (text_wrap == null && Geo$1.geometryType(feature.geometry.type) !== 'line') {
+    if (text_wrap == null && !style.can_articulate) {
       // point labels (for point and polygon features) have word wrap on w/default max length,
       // line labels default off
       text_wrap = true;
@@ -11137,11 +11166,12 @@ const TextSettings = {
   },
 
   // Build CSS-style font string (to set Canvas draw state)
-  fontCSS(_ref) {
-    let style = _ref.style,
-        weight = _ref.weight,
-        px_size = _ref.px_size,
-        family = _ref.family;
+  fontCSS({
+    style,
+    weight,
+    px_size,
+    family
+  }) {
     return [style, weight, px_size + 'px', family].filter(x => x) // remove null props
     .join(' ');
   }
@@ -11154,11 +11184,10 @@ this.f.style.cssText="max-width:none;display:inline-block;position:absolute;heig
 function x(a,b){a.a.style.cssText="max-width:none;min-width:20px;min-height:20px;display:inline-block;overflow:hidden;position:absolute;width:auto;margin:0;padding:0;top:-999px;left:-999px;white-space:nowrap;font:"+b+";";}function y(a){var b=a.a.offsetWidth,c=b+100;a.f.style.width=c+"px";a.c.scrollLeft=c;a.b.scrollLeft=a.b.scrollWidth+100;return a.g!==b?(a.g=b,!0):!1}function z(a,b){function c(){var a=l;y(a)&&a.a.parentNode&&b(a.g);}var l=a;m(a.b,c);m(a.c,c);y(a);}function A(a,b){var c=b||{};this.family=a;this.style=c.style||"normal";this.weight=c.weight||"normal";this.stretch=c.stretch||"normal";}var B=null,C=null,E=null,F=null;function I(){if(null===E){var a=document.createElement("div");try{a.style.font="condensed 100px sans-serif";}catch(b){}E=""!==a.style.font;}return E}function J(a,b){return [a.style,a.weight,I()?a.stretch:"","100px",b].join(" ")}
 A.prototype.load=function(a,b){var c=this,l=a||"BESbswy",r=0,D=b||3E3,G=(new Date).getTime();return new Promise(function(a,b){var e;null===F&&(F=!!document.fonts);if(e=F)null===C&&(C=/OS X.*Version\/10\..*Safari/.test(navigator.userAgent)&&/Apple/.test(navigator.vendor)),e=!C;if(e){e=new Promise(function(a,b){function f(){(new Date).getTime()-G>=D?b():document.fonts.load(J(c,'"'+c.family+'"'),l).then(function(c){1<=c.length?a():setTimeout(f,25);},function(){b();});}f();});var K=new Promise(function(a,
 c){r=setTimeout(c,D);});Promise.race([K,e]).then(function(){clearTimeout(r);a(c);},function(){b(c);});}else n(function(){function e(){var b;if(b=-1!=g&&-1!=h||-1!=g&&-1!=k||-1!=h&&-1!=k)(b=g!=h&&g!=k&&h!=k)||(null===B&&(b=/AppleWebKit\/([0-9]+)(?:\.([0-9]+))/.exec(window.navigator.userAgent),B=!!b&&(536>parseInt(b[1],10)||536===parseInt(b[1],10)&&11>=parseInt(b[2],10))),b=B&&(g==u&&h==u&&k==u||g==v&&h==v&&k==v||g==w&&h==w&&k==w)),b=!b;b&&(d.parentNode&&d.parentNode.removeChild(d),clearTimeout(r),a(c));}
-function H(){if((new Date).getTime()-G>=D)d.parentNode&&d.parentNode.removeChild(d),b(c);else{var a=document.hidden;if(!0===a||void 0===a)g=f.a.offsetWidth,h=p.a.offsetWidth,k=q.a.offsetWidth,e();r=setTimeout(H,50);}}var f=new t(l),p=new t(l),q=new t(l),g=-1,h=-1,k=-1,u=-1,v=-1,w=-1,d=document.createElement("div");d.dir="ltr";x(f,J(c,"sans-serif"));x(p,J(c,"serif"));x(q,J(c,"monospace"));d.appendChild(f.a);d.appendChild(p.a);d.appendChild(q.a);document.body.appendChild(d);u=f.a.offsetWidth;v=p.a.offsetWidth;
+function H(){if((new Date).getTime()-G>=D)d.parentNode&&d.parentNode.removeChild(d),b(c);else {var a=document.hidden;if(!0===a||void 0===a)g=f.a.offsetWidth,h=p.a.offsetWidth,k=q.a.offsetWidth,e();r=setTimeout(H,50);}}var f=new t(l),p=new t(l),q=new t(l),g=-1,h=-1,k=-1,u=-1,v=-1,w=-1,d=document.createElement("div");d.dir="ltr";x(f,J(c,"sans-serif"));x(p,J(c,"serif"));x(q,J(c,"monospace"));d.appendChild(f.a);d.appendChild(p.a);d.appendChild(q.a);document.body.appendChild(d);u=f.a.offsetWidth;v=p.a.offsetWidth;
 w=q.a.offsetWidth;H();z(f,function(a){g=a;e();});x(f,J(c,'"'+c.family+'",sans-serif'));z(p,function(a){h=a;e();});x(p,J(c,'"'+c.family+'",serif'));z(q,function(a){k=a;e();});x(q,J(c,'"'+c.family+'",monospace'));});})};module.exports=A;}());
 });
 
-/* global FontFace */
 const FontManager = {
   // Font detection
   fonts_loaded: Promise.resolve(),
@@ -11216,24 +11245,30 @@ const FontManager = {
 
 
     try {
+      // FontFaceObserver does not directly support variable fonts syntax, which allows for ranges,
+      // e.g. `font-weight: 100 800`. FontFaceObserver will insert the entire string value into a
+      // CSS `font` shorthand property, causing an error. To get around this, we simply take the first
+      // value, because as soon as one variant of the variable font is available, they all should be.
+      // See https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Fonts/Variable_Fonts_Guide
+      options.weight = typeof options.weight === 'string' ? options.weight.split(' ')[0] : options.weight;
       const observer = new fontfaceobserver_standalone(family, options);
       await observer.load(); // Promise resolves, font is available
 
       log('debug', `Font face '${family}' is available`, options);
     } catch (e) {
       // Promise rejects, font is not available
-      log('debug', `Font face '${family}' is NOT available`, options);
+      log('warn', `Font face '${family}' is NOT available`, options, e);
     }
   },
 
   // Loads a font face via either the native FontFace API, or CSS injection
   // TODO: consider support for multiple format URLs per face, unicode ranges
-  async injectFontFace(_ref) {
-    let family = _ref.family,
-        url = _ref.url,
-        weight = _ref.weight,
-        style = _ref.style;
-
+  async injectFontFace({
+    family,
+    url,
+    weight,
+    style
+  }) {
     if (this.supports_native_font_loading === undefined) {
       this.supports_native_font_loading = window.FontFace !== undefined;
     } // Convert blob URLs, depending on whether the native FontFace API will be used or not.
@@ -11252,7 +11287,7 @@ const FontManager = {
     let data = url;
 
     if (url.slice(0, 5) === 'blob:') {
-      data = await Utils.io(url, 60000, 'arraybuffer');
+      data = (await Utils.io(url, 60000, 'arraybuffer')).body;
       let bytes = new Uint8Array(data);
 
       if (this.supports_native_font_loading) {
@@ -11352,7 +11387,8 @@ const accents_and_vowels = '[\u0300-\u036F' + // Combining Diacritical Marks
 ']';
 const combo_characters = '[\u094D\u09CD\u0A4D\u0ACD\u0B4D\u0C4D\u0CCD\u0D4D\u0F84\u1039\u17D2\u1A60\u1A7F]'; // Find the next grapheme cluster (non-Arabic)
 
-const grapheme_match = new RegExp('^.(?:' + accents_and_vowels + '+)?' + '(' + combo_characters + '\\W(?:' + accents_and_vowels + '+)?)*'); // Scripts that cannot be curved due (due to contextual shaping and/or layout complexity)
+const grapheme_match = new RegExp(`^.(?:${accents_and_vowels}+)?(${combo_characters}\\W(?:${accents_and_vowels}+)?)*`); // eslint-disable-line no-misleading-character-class
+// Scripts that cannot be curved due (due to contextual shaping and/or layout complexity)
 
 const curve_blacklist = {
   Mongolian: '\u1800-\u18AF'
@@ -11438,15 +11474,7 @@ function splitLabelText(text, rtl, cache) {
 // "text wrap" and "max line" values
 
 class MultiLine {
-  constructor(context, max_lines, text_wrap) {
-    if (max_lines === void 0) {
-      max_lines = Infinity;
-    }
-
-    if (text_wrap === void 0) {
-      text_wrap = Infinity;
-    }
-
+  constructor(context, max_lines = Infinity, text_wrap = Infinity) {
     this.width = 0;
     this.height = 0;
     this.lines = [];
@@ -11581,15 +11609,7 @@ MultiLine.ellipsis = '...'; // A Private class used by MultiLine to contain the 
 // including character count, width, height and text
 
 class Line {
-  constructor(height, text_wrap) {
-    if (height === void 0) {
-      height = 0;
-    }
-
-    if (text_wrap === void 0) {
-      text_wrap = 0;
-    }
-
+  constructor(height = 0, text_wrap = 0) {
     this.chars = 0;
     this.text = '';
     this.height = Math.ceil(height);
@@ -11614,6 +11634,8 @@ class TextCanvas {
     this.vertical_text_buffer = 8; // vertical pixel padding around text
 
     this.horizontal_text_buffer = 4; // text styling such as italic emphasis is not measured by the Canvas API, so padding is necessary
+
+    this.background_size = 4; // padding around label for optional background box (TODO: make configurable?)
   }
 
   createCanvas() {
@@ -11630,13 +11652,14 @@ class TextCanvas {
   } // Set font style params for canvas drawing
 
 
-  setFont(_ref) {
-    let font_css = _ref.font_css,
-        fill = _ref.fill,
-        stroke = _ref.stroke,
-        stroke_width = _ref.stroke_width,
-        px_size = _ref.px_size,
-        supersample = _ref.supersample;
+  setFont({
+    font_css,
+    fill,
+    stroke,
+    stroke_width,
+    px_size,
+    supersample
+  }) {
     this.px_size = px_size;
     let ctx = this.context;
     let dpr = Utils.device_pixel_ratio * supersample;
@@ -11668,8 +11691,10 @@ class TextCanvas {
   }
 
   processTextSizesTask(task) {
-    let cursor = task.cursor,
-        texts = task.texts;
+    let {
+      cursor,
+      texts
+    } = task;
     cursor.style_idx = cursor.style_idx || 0;
 
     while (cursor.style_idx < cursor.styles.length) {
@@ -11741,13 +11766,17 @@ class TextCanvas {
   // Includes word wrapping, returns size info for whole text block and individual lines
 
 
-  textSize(style, text, _ref2) {
-    let transform = _ref2.transform,
-        text_wrap = _ref2.text_wrap,
-        max_lines = _ref2.max_lines,
-        _ref2$stroke_width = _ref2.stroke_width,
-        stroke_width = _ref2$stroke_width === void 0 ? 0 : _ref2$stroke_width,
-        supersample = _ref2.supersample;
+  textSize(style, text, {
+    transform,
+    text_wrap,
+    max_lines,
+    stroke_width = 0,
+    background_color,
+    background_stroke_width = 0,
+    background_width,
+    underline_width = 0,
+    supersample
+  }) {
     // Check cache first
     TextCanvas.cache.text[style] = TextCanvas.cache.text[style] || {};
 
@@ -11759,21 +11788,27 @@ class TextCanvas {
     TextCanvas.cache.stats.text_misses++;
     TextCanvas.cache.text_count++; // Calc and store in cache
 
-    let dpr = Utils.device_pixel_ratio * supersample;
-    let str = this.applyTextTransform(text, transform);
-    let ctx = this.context;
-    let vertical_buffer = this.vertical_text_buffer * dpr;
-    let horizontal_buffer = dpr * (stroke_width + this.horizontal_text_buffer);
-    let leading = 2 * dpr; // make configurable and/or use Canvas TextMetrics when available
+    const dpr = Utils.device_pixel_ratio * supersample;
+    const str = this.applyTextTransform(text, transform);
+    const ctx = this.context;
+    const vertical_buffer = this.vertical_text_buffer * dpr;
+    const horizontal_buffer = (stroke_width + this.horizontal_text_buffer) * dpr;
+    background_width = background_width != null ? background_width : this.background_size; // apply default background width
 
-    let line_height = this.px_size + leading; // px_size already in device pixels
+    const background_size = background_color || background_stroke_width ? (background_width + background_stroke_width) * dpr : 0;
+    const leading = (2 + underline_width + (underline_width ? stroke_width + 1 : 0)) * dpr; // adjust for underline and text stroke
+
+    const line_height = this.px_size + leading; // px_size already in device pixels
     // Parse string into series of lines if it exceeds the text wrapping value or contains line breaks
+    // const multiline = MultiLine.parse(str, text_wrap, max_lines, line_height, ctx);
 
-    let multiline = MultiLine.parse(str, text_wrap, max_lines, line_height, ctx); // Final dimensions of text
-
-    let height = multiline.height;
-    let width = multiline.width;
-    let lines = multiline.lines;
+    let {
+      width,
+      height,
+      lines
+    } = MultiLine.parse(str, text_wrap, max_lines, line_height, ctx);
+    width += background_size * 2;
+    height += background_size * 2;
     let collision_size = [width / dpr, height / dpr];
     let texture_size = [width + 2 * horizontal_buffer, height + 2 * vertical_buffer];
     let logical_size = [texture_size[0] / dpr, texture_size[1] / dpr]; // Returns lines (w/per-line info for drawing) and text's overall bounding box + canvas size
@@ -11784,51 +11819,139 @@ class TextCanvas {
         collision_size,
         texture_size,
         logical_size,
-        line_height
+        horizontal_buffer,
+        vertical_buffer,
+        dpr,
+        line_height,
+        background_size
       }
     };
     return TextCanvas.cache.text[style][text];
   } // Draw multiple lines of text
 
 
-  drawTextMultiLine(lines, _ref3, size, _ref4, type) {
-    let x = _ref3[0],
-        y = _ref3[1];
-    let stroke = _ref4.stroke,
-        _ref4$stroke_width = _ref4.stroke_width,
-        stroke_width = _ref4$stroke_width === void 0 ? 0 : _ref4$stroke_width,
-        transform = _ref4.transform,
-        align = _ref4.align,
-        supersample = _ref4.supersample;
-    let line_height = size.line_height;
-    let height = y;
+  drawTextMultiLine(lines, [x, y], size, text_settings, label_type) {
+    const {
+      dpr,
+      collision_size,
+      texture_size,
+      line_height,
+      horizontal_buffer,
+      vertical_buffer
+    } = size; // draw optional background box
+
+    if (text_settings.background_color || text_settings.background_stroke_color) {
+      const background_stroke_color = text_settings.background_stroke_color;
+      const background_stroke_width = (text_settings.background_stroke_width || 0) * dpr;
+      this.context.save();
+
+      if (text_settings.background_color) {
+        this.context.fillStyle = text_settings.background_color;
+        this.context.fillRect( // shift to "foreground" stroke texture for curved labels (separate stroke and fill textures)
+        x + horizontal_buffer + (label_type === 'curved' ? texture_size[0] : 0) + background_stroke_width, y + vertical_buffer + background_stroke_width, dpr * collision_size[0] - background_stroke_width * 2, dpr * collision_size[1] - background_stroke_width * 2);
+      } // optional stroke around background box
+
+
+      if (background_stroke_color && background_stroke_width) {
+        this.context.strokeStyle = background_stroke_color;
+        this.context.lineWidth = background_stroke_width;
+        this.context.strokeRect( // shift to "foreground" stroke texture for curved labels (separate stroke and fill textures)
+        x + horizontal_buffer + (label_type === 'curved' ? texture_size[0] : 0) + background_stroke_width * 0.5, y + vertical_buffer + background_stroke_width * 0.5, dpr * collision_size[0] - background_stroke_width, dpr * collision_size[1] - background_stroke_width);
+      }
+
+      this.context.restore();
+    } // draw text
+
+
+    const underline_width = text_settings.underline_width || 0;
+    const stroke_width = text_settings.stroke_width || 0;
+    const voffset = underline_width ? // offset text position to account for underline and text stroke
+    (underline_width + stroke_width + 1) * 0.5 * dpr : 0;
+    let ty = y - voffset;
 
     for (let line_num = 0; line_num < lines.length; line_num++) {
       let line = lines[line_num];
-      this.drawTextLine(line, [x, height], size, {
-        stroke,
-        stroke_width,
-        transform,
-        align,
-        supersample
-      }, type);
-      height += line_height;
-    } // Draw bounding boxes for debugging
+      this.drawTextLine(line, [x, ty], size, text_settings, label_type);
+      ty += line_height;
+    }
 
+    this.drawTextDebug([x, y], size, label_type);
+  } // Draw single line of text at specified location, adjusting for buffer and baseline
+
+
+  drawTextLine(line, [x, y], size, text_settings, type) {
+    const {
+      stroke,
+      stroke_width,
+      transform,
+      align = 'center'
+    } = text_settings;
+    const {
+      horizontal_buffer,
+      vertical_buffer,
+      texture_size,
+      background_size,
+      line_height,
+      dpr
+    } = size;
+    const underline_width = (text_settings.underline_width || 0) * dpr;
+    const text = this.applyTextTransform(line.text, transform); // Text alignment
+
+    let tx;
+
+    if (align === 'left') {
+      tx = x + horizontal_buffer + background_size;
+    } else if (align === 'center') {
+      tx = x + texture_size[0] / 2 - line.width / 2;
+    } else if (align === 'right') {
+      tx = x + texture_size[0] - line.width - horizontal_buffer - background_size;
+    } // In the absence of better Canvas TextMetrics (not supported by browsers yet),
+    // 0.75 buffer produces a better approximate vertical centering of text
+
+
+    const ty = y + vertical_buffer * 0.75 + line_height + background_size - underline_width * 0.5; // Draw stroke and fill separately for curved text. Offset stroke in texture atlas by shift.
+
+    const shift = stroke && stroke_width > 0 && type === 'curved' ? texture_size[0] : 0; // optional text underline
+
+    if (underline_width) {
+      this.context.save();
+      this.context.strokeStyle = this.context.fillStyle;
+      this.context.lineWidth = underline_width; // adjust the underline to account for the text stroke
+
+      const uy = ty + (stroke_width * 0.5 + 2) * dpr + this.context.lineWidth * 0.5;
+      this.context.beginPath();
+      this.context.moveTo(tx + shift, uy);
+      this.context.lineTo(tx + shift + line.width, uy);
+      this.context.stroke();
+      this.context.restore();
+    }
+
+    if (stroke && stroke_width > 0) {
+      this.context.strokeText(text, tx + shift, ty);
+    }
+
+    this.context.fillText(text, tx, ty);
+  } // Draw optional text debug boxes
+
+
+  drawTextDebug([x, y], size, label_type) {
+    const {
+      dpr,
+      horizontal_buffer,
+      vertical_buffer,
+      texture_size,
+      collision_size
+    } = size;
+    const line_width = 2;
 
     if (debugSettings$1.draw_label_collision_boxes) {
       this.context.save();
-      let dpr = Utils.device_pixel_ratio * supersample;
-      let horizontal_buffer = dpr * (this.horizontal_text_buffer + stroke_width);
-      let vertical_buffer = dpr * this.vertical_text_buffer;
-      let collision_size = size.collision_size;
-      let lineWidth = 2;
       this.context.strokeStyle = 'blue';
-      this.context.lineWidth = lineWidth;
+      this.context.lineWidth = line_width;
       this.context.strokeRect(x + horizontal_buffer, y + vertical_buffer, dpr * collision_size[0], dpr * collision_size[1]);
 
-      if (type === 'curved') {
-        this.context.strokeRect(x + size.texture_size[0] + horizontal_buffer, y + vertical_buffer, dpr * collision_size[0], dpr * collision_size[1]);
+      if (label_type === 'curved') {
+        this.context.strokeRect(x + texture_size[0] + horizontal_buffer, y + vertical_buffer, dpr * collision_size[0], dpr * collision_size[1]);
       }
 
       this.context.restore();
@@ -11836,59 +11959,17 @@ class TextCanvas {
 
     if (debugSettings$1.draw_label_texture_boxes) {
       this.context.save();
-      let texture_size = size.texture_size;
-      let lineWidth = 2;
       this.context.strokeStyle = 'green';
-      this.context.lineWidth = lineWidth; // stroke is applied internally, so the outer border is the edge of the texture
+      this.context.lineWidth = line_width; // stroke is applied internally, so the outer border is the edge of the texture
 
-      this.context.strokeRect(x + lineWidth, y + lineWidth, texture_size[0] - 2 * lineWidth, texture_size[1] - 2 * lineWidth);
+      this.context.strokeRect(x + line_width, y + line_width, texture_size[0] - 2 * line_width, texture_size[1] - 2 * line_width);
 
-      if (type === 'curved') {
-        this.context.strokeRect(x + lineWidth + size.texture_size[0], y + lineWidth, texture_size[0] - 2 * lineWidth, texture_size[1] - 2 * lineWidth);
+      if (label_type === 'curved') {
+        this.context.strokeRect(x + line_width + texture_size[0], y + line_width, texture_size[0] - 2 * line_width, texture_size[1] - 2 * line_width);
       }
 
       this.context.restore();
     }
-  } // Draw single line of text at specified location, adjusting for buffer and baseline
-
-
-  drawTextLine(line, _ref5, size, _ref6, type) {
-    let x = _ref5[0],
-        y = _ref5[1];
-    let stroke = _ref6.stroke,
-        _ref6$stroke_width = _ref6.stroke_width,
-        stroke_width = _ref6$stroke_width === void 0 ? 0 : _ref6$stroke_width,
-        transform = _ref6.transform,
-        align = _ref6.align,
-        supersample = _ref6.supersample;
-    let dpr = Utils.device_pixel_ratio * supersample;
-    align = align || 'center';
-    let vertical_buffer = this.vertical_text_buffer * dpr;
-    let texture_size = size.texture_size;
-    let line_height = size.line_height;
-    let horizontal_buffer = dpr * (stroke_width + this.horizontal_text_buffer);
-    let str = this.applyTextTransform(line.text, transform); // Text alignment
-
-    let tx;
-
-    if (align === 'left') {
-      tx = x + horizontal_buffer;
-    } else if (align === 'center') {
-      tx = x + texture_size[0] / 2 - line.width / 2;
-    } else if (align === 'right') {
-      tx = x + texture_size[0] - line.width - horizontal_buffer;
-    } // In the absence of better Canvas TextMetrics (not supported by browsers yet),
-    // 0.75 buffer produces a better approximate vertical centering of text
-
-
-    let ty = y + vertical_buffer * 0.75 + line_height; // Draw stroke and fill separately for curved text. Offset stroke in texture atlas by shift.
-
-    if (stroke && stroke_width > 0) {
-      let shift = type === 'curved' ? texture_size[0] : 0;
-      this.context.strokeText(str, tx + shift, ty);
-    }
-
-    this.context.fillText(str, tx, ty);
   }
 
   rasterize(texts, textures, tile_id, texture_prefix, gl) {
@@ -11918,9 +11999,11 @@ class TextCanvas {
   }
 
   processRasterizeTask(task) {
-    let cursor = task.cursor,
-        texts = task.texts,
-        textures = task.textures;
+    let {
+      cursor,
+      texts,
+      textures
+    } = task;
     let texture; // Rasterize one texture at a time, so we only have to keep one canvas in memory (they can be large)
 
     while (cursor.texture_idx < task.textures.length) {
@@ -11972,11 +12055,10 @@ class TextCanvas {
                   texcoord = cache.texcoord;
                 } else {
                   let texture_position = cache.texture_position;
-
-                  let _this$textSize = this.textSize(style, word, text_settings),
-                      size = _this$textSize.size,
-                      lines = _this$textSize.lines;
-
+                  let {
+                    size,
+                    lines
+                  } = this.textSize(style, word, text_settings);
                   this.drawTextMultiLine(lines, texture_position, size, text_settings, type);
                   texcoord = Texture.getTexcoordsForSprite(texture_position, size.texture_size, texture.texture_size);
                   cache.texcoord = texcoord;
@@ -12008,11 +12090,10 @@ class TextCanvas {
                     text_info.texcoords_stroke.push(texcoord_stroke);
                   } else {
                     let texture_position = cache.texture_position;
-
-                    let _this$textSize2 = this.textSize(style, word, text_settings),
-                        size = _this$textSize2.size,
-                        lines = _this$textSize2.lines;
-
+                    let {
+                      size,
+                      lines
+                    } = this.textSize(style, word, text_settings);
                     this.drawTextMultiLine(lines, texture_position, size, text_settings, type);
                     texcoord = Texture.getTexcoordsForSprite(texture_position, size.texture_size, texture.texture_size);
                     let texture_position_stroke = [texture_position[0] + size.texture_size[0], texture_position[1]];
@@ -12033,19 +12114,16 @@ class TextCanvas {
           } else {
             let lines = this.textSize(style, text, text_settings).lines;
 
+            const aligned_text_settings = _extends({}, text_settings);
+
             for (let align in text_info.align) {
               // Only render for current texture
               if (text_info.align[align].texture_id !== cursor.texture_idx) {
                 continue;
               }
 
-              this.drawTextMultiLine(lines, text_info.align[align].texture_position, text_info.size, {
-                stroke: text_settings.stroke,
-                stroke_width: text_settings.stroke_width,
-                transform: text_settings.transform,
-                supersample: text_settings.supersample,
-                align: align
-              });
+              aligned_text_settings.align = align;
+              this.drawTextMultiLine(lines, text_info.align[align].texture_position, text_info.size, aligned_text_settings);
               text_info.align[align].texcoords = Texture.getTexcoordsForSprite(text_info.align[align].texture_position, text_info.size.texture_size, texture.texture_size);
             }
           }
@@ -12238,10 +12316,7 @@ class TextCanvas {
 
     size = typeof size === 'string' ? size : String(size); // need a string for regex
 
-    let _ref7 = size.match(TextCanvas.font_size_re) || [],
-        px_size = _ref7[1],
-        units = _ref7[2];
-
+    let [, px_size, units] = size.match(TextCanvas.font_size_re) || [];
     units = units || 'px';
 
     if (units === 'em') {
@@ -12316,7 +12391,7 @@ const TextLabels = {
     } // Compute text style and layout settings for this feature label
 
 
-    let text_settings = TextSettings.compute(feature, draw, context);
+    let text_settings = TextSettings.compute(draw, context);
     let text_settings_key = TextSettings.key(text_settings); // first label in tile, or with this style?
 
     this.texts[tile.id] = this.texts[tile.id] || {};
@@ -12573,20 +12648,39 @@ const TextLabels = {
     // Font settings are required
     if (!draw || !draw.font || typeof draw.font !== 'object') {
       return;
-    } // Colors
+    } // Font weight
 
 
-    draw.font.fill = StyleParser.createPropertyCache(draw.font.fill);
+    draw.font.weight = StyleParser.createPropertyCache(draw.font.weight); // Colors
+
+    draw.font.fill = StyleParser.createPropertyCache(draw.font.fill || TextSettings.defaults.fill);
+    draw.font.alpha = StyleParser.createPropertyCache(draw.font.alpha);
 
     if (draw.font.stroke) {
       draw.font.stroke.color = StyleParser.createPropertyCache(draw.font.stroke.color);
+      draw.font.stroke.alpha = StyleParser.createPropertyCache(draw.font.stroke.alpha);
+    }
+
+    if (draw.font.background) {
+      draw.font.background.color = StyleParser.createPropertyCache(draw.font.background.color);
+      draw.font.background.alpha = StyleParser.createPropertyCache(draw.font.background.alpha);
+      draw.font.background.width = StyleParser.createPropertyCache(draw.font.background.width, StyleParser.parsePositiveNumber);
+
+      if (draw.font.background.stroke) {
+        draw.font.background.stroke.color = StyleParser.createPropertyCache(draw.font.background.stroke.color);
+        draw.font.background.stroke.alpha = StyleParser.createPropertyCache(draw.font.background.stroke.alpha);
+      }
     } // Convert font and text stroke sizes
 
 
-    draw.font.px_size = StyleParser.createPropertyCache(draw.font.size || TextSettings.defaults.size, TextCanvas.fontPixelSize);
+    draw.font.px_size = StyleParser.createPropertyCache(draw.font.size || TextSettings.defaults.size, TextCanvas.fontPixelSize, TextCanvas.fontPixelSize);
 
     if (draw.font.stroke && draw.font.stroke.width != null) {
       draw.font.stroke.width = StyleParser.createPropertyCache(draw.font.stroke.width, StyleParser.parsePositiveNumber);
+    }
+
+    if (draw.font.background && draw.font.background.stroke && draw.font.background.stroke.width != null) {
+      draw.font.background.stroke.width = StyleParser.createPropertyCache(draw.font.background.stroke.width, StyleParser.parsePositiveNumber);
     } // Offset (2d array)
 
 
@@ -13066,11 +13160,7 @@ const mat4 = {
 };
 
 class Camera {
-  constructor(name, view, options) {
-    if (options === void 0) {
-      options = {};
-    }
-
+  constructor(name, view, options = {}) {
     this.view = view;
     this.position = options.position;
     this.zoom = options.zoom;
@@ -13152,11 +13242,7 @@ class Camera {
 */
 
 class PerspectiveCamera extends Camera {
-  constructor(name, view, options) {
-    if (options === void 0) {
-      options = {};
-    }
-
+  constructor(name, view, options = {}) {
     super(name, view, options);
     this.type = 'perspective'; // a single scalar, or pairs of stops mapping zoom levels, e.g. [zoom, focal length]
 
@@ -13190,12 +13276,12 @@ class PerspectiveCamera extends Camera {
   // (focal length is used if both are passed).
 
 
-  constrainCamera(_ref) {
-    let view_height = _ref.view_height,
-        height = _ref.height,
-        focal_length = _ref.focal_length,
-        fov = _ref.fov;
-
+  constrainCamera({
+    view_height,
+    height,
+    focal_length,
+    fov
+  }) {
     // Solve for camera height
     if (!height) {
       // We have focal length, calculate FOV
@@ -13230,14 +13316,14 @@ class PerspectiveCamera extends Camera {
     // Height of the viewport in meters at current zoom
     var viewport_height = this.view.size.css.height * this.view.meters_per_pixel; // Compute camera properties to fit desired view
 
-    var _this$constrainCamera = this.constrainCamera({
+    var {
+      height,
+      fov
+    } = this.constrainCamera({
       view_height: viewport_height,
       focal_length: Utils.interpolate(this.view.zoom, this.focal_length),
       fov: Utils.interpolate(this.view.zoom, this.fov)
-    }),
-        height = _this$constrainCamera.height,
-        fov = _this$constrainCamera.fov; // View matrix
-
+    }); // View matrix
 
     var position = [this.view.center.meters.x, this.view.center.meters.y, height];
     this.position_meters = position; // mat4.lookAt(this.view_matrix,
@@ -13284,11 +13370,7 @@ class PerspectiveCamera extends Camera {
 
 
 class IsometricCamera extends Camera {
-  constructor(name, view, options) {
-    if (options === void 0) {
-      options = {};
-    }
-
+  constructor(name, view, options = {}) {
     super(name, view, options);
     this.type = 'isometric';
     this.axis = options.axis || {
@@ -13354,11 +13436,7 @@ class IsometricCamera extends Camera {
 
 
 class FlatCamera extends IsometricCamera {
-  constructor(name, view, options) {
-    if (options === void 0) {
-      options = {};
-    }
-
+  constructor(name, view, options = {}) {
     super(name, view, options);
     this.type = 'flat';
   }
@@ -13481,12 +13559,11 @@ class View {
   } // Set the map view, can be passed an object with lat/lng and/or zoom
 
 
-  setView(_temp) {
-    let _ref = _temp === void 0 ? {} : _temp,
-        lng = _ref.lng,
-        lat = _ref.lat,
-        zoom = _ref.zoom;
-
+  setView({
+    lng,
+    lat,
+    zoom
+  } = {}) {
     var changed = false; // Set center
 
     if (typeof lng === 'number' && typeof lat === 'number') {
@@ -13708,17 +13785,13 @@ class View {
 
 }
 
-var points_vs = "uniform vec2 u_resolution;\nuniform float u_time;\nuniform vec3 u_map_position;\nuniform vec4 u_tile_origin;\nuniform float u_tile_proxy_order_offset;\nuniform bool u_tile_fade_in;\nuniform float u_meters_per_pixel;\nuniform float u_device_pixel_ratio;\nuniform float u_visible_time;\nuniform bool u_view_panning;\nuniform float u_view_pan_snap_timer;\n\nuniform mat4 u_model;\nuniform mat4 u_modelView;\nuniform mat3 u_normalMatrix;\nuniform mat3 u_inverseNormalMatrix;\n\nattribute vec4 a_position;\nattribute vec4 a_shape;\nattribute vec4 a_color;\nattribute vec2 a_texcoord;\nattribute vec2 a_offset;\n\nuniform float u_point_type;\n\n#ifdef TANGRAM_CURVED_LABEL\n    attribute vec4 a_offsets;\n    attribute vec4 a_pre_angles;\n    attribute vec4 a_angles;\n#endif\n\nvarying vec4 v_color;\nvarying vec2 v_texcoord;\nvarying vec4 v_world_position;\nvarying float v_alpha_factor;\n\n#ifdef TANGRAM_HAS_SHADER_POINTS\n    attribute float a_outline_edge;\n    attribute vec4 a_outline_color;\n\n    varying float v_outline_edge;\n    varying vec4 v_outline_color;\n    varying float v_aa_offset;\n#endif\n\n#ifdef TANGRAM_SHOW_HIDDEN_LABELS\n    varying float v_label_hidden;\n#endif\n\n#define TANGRAM_PI 3.14159265359\n#define TANGRAM_NORMAL vec3(0., 0., 1.)\n\n#pragma tangram: camera\n#pragma tangram: material\n#pragma tangram: lighting\n#pragma tangram: raster\n#pragma tangram: global\n\nvec2 rotate2D(vec2 _st, float _angle) {\n    return mat2(cos(_angle),-sin(_angle),\n                sin(_angle),cos(_angle)) * _st;\n}\n\n#ifdef TANGRAM_CURVED_LABEL\n    // Assumes stops are [0, 0.33, 0.66, 0.99];\n    float mix4linear(vec4 v, float x) {\n        x = clamp(x, 0., 1.);\n        return mix(mix(v[0], v[1], 3. * x),\n                   mix(v[1],\n                       mix(v[2], v[3], 3. * (max(x, .66) - .66)),\n                       3. * (clamp(x, .33, .66) - .33)),\n                   step(0.33, x)\n                );\n    }\n#endif\n\nvoid main() {\n    // Initialize globals\n    #pragma tangram: setup\n\n    // discard hidden labels by collapsing into degenerate triangle\n    #ifndef TANGRAM_SHOW_HIDDEN_LABELS\n        if (a_shape.w == 0.) {\n            gl_Position = vec4(0., 0., 0., 1.);\n            return;\n        }\n    #else\n        // highlight hidden label in fragment shader for debugging\n        if (a_shape.w == 0.) {\n            v_label_hidden = 1.; // label debug testing\n        }\n        else {\n            v_label_hidden = 0.;\n        }\n    #endif\n\n    v_alpha_factor = 1.0;\n    v_color = a_color;\n    v_texcoord = a_texcoord; // UV from vertex attribute\n\n    #ifdef TANGRAM_HAS_SHADER_POINTS\n        v_outline_color = a_outline_color;\n        v_outline_edge = a_outline_edge;\n\n        if (u_point_type == TANGRAM_POINT_TYPE_SHADER) { // shader point\n            // use point dimensions for UVs instead (ignore attribute), add antialiasing info for fragment shader\n            float _size = abs(a_shape.x / 128.); // radius in pixels\n            v_texcoord = sign(a_shape.xy) * (_size + 1.) / _size;\n            _size += 2.;\n            v_aa_offset = 2. / _size;\n        }\n    #endif\n\n    // Position\n    vec4 position = u_modelView * vec4(a_position.xyz, 1.);\n\n    // Apply positioning and scaling in screen space\n    vec2 _shape = a_shape.xy / 256.;                 // values have an 8-bit fraction\n    vec2 _offset = vec2(a_offset.x, -a_offset.y);    // flip y to make it point down\n    float _theta = a_shape.z / 4096.;\n\n    #ifdef TANGRAM_CURVED_LABEL\n        //TODO: potential bug? null is passed in for non-curved labels, otherwise the first offset will be 0\n        if (a_offsets[0] != 0.){\n            vec4 _angles_scaled = (TANGRAM_PI / 16384.) * a_angles;\n            vec4 _pre_angles_scaled = (TANGRAM_PI / 128.) * a_pre_angles;\n            vec4 _offsets_scaled = (1. / 64.) * a_offsets;\n\n            float _zoom = clamp(u_map_position.z - u_tile_origin.z, 0., 1.); //fract(u_map_position.z);\n            float _pre_angle = mix4linear(_pre_angles_scaled, _zoom);\n            float _angle = mix4linear(_angles_scaled, _zoom);\n            float _offset_curve = mix4linear(_offsets_scaled, _zoom);\n\n            _shape = rotate2D(_shape, _pre_angle); // rotate in place\n            _shape.x += _offset_curve;            // offset for curved label segment\n            _shape = rotate2D(_shape, _angle);     // rotate relative to curved label anchor\n            _shape += rotate2D(_offset, _theta);   // offset if specified in the scene file\n        }\n        else {\n            _shape = rotate2D(_shape + _offset, _theta);\n        }\n    #else\n        _shape = rotate2D(_shape + _offset, _theta);\n    #endif\n\n    // Fade in (if requested) based on time mesh has been visible.\n    // Value passed to fragment shader in the v_alpha_factor varying\n    #ifdef TANGRAM_FADE_IN_RATE\n        if (u_tile_fade_in) {\n            v_alpha_factor *= clamp(u_visible_time * TANGRAM_FADE_IN_RATE, 0., 1.);\n        }\n    #endif\n\n    // World coordinates for 3d procedural textures\n    v_world_position = u_model * position;\n    v_world_position.xy += _shape * u_meters_per_pixel;\n    v_world_position = wrapWorldPosition(v_world_position);\n\n    // Modify position before camera projection\n    #pragma tangram: position\n\n    cameraProjection(position);\n\n    #ifdef TANGRAM_LAYER_ORDER\n        // +1 is to keep all layers including proxies > 0\n        applyLayerOrder(a_position.w + u_tile_proxy_order_offset + 1., position);\n    #endif\n\n    // Apply pixel offset in screen-space\n    // Multiply by 2 is because screen is 2 units wide Normalized Device Coords (and u_resolution device pixels wide)\n    // Device pixel ratio adjustment is because shape is in logical pixels\n    position.xy += _shape * position.w * 2. * u_device_pixel_ratio / u_resolution;\n    #ifdef TANGRAM_HAS_SHADER_POINTS\n        if (u_point_type == TANGRAM_POINT_TYPE_SHADER) { // shader point\n            // enlarge by 1px to catch missed MSAA fragments\n            position.xy += sign(_shape) * position.w * u_device_pixel_ratio / u_resolution;\n        }\n    #endif\n\n    // Snap to pixel grid\n    // Only applied to fully upright sprites/labels (not shader-drawn points), while panning is not active\n    #ifdef TANGRAM_HAS_SHADER_POINTS\n    if (!u_view_panning && (abs(_theta) < TANGRAM_EPSILON) && u_point_type != TANGRAM_POINT_TYPE_SHADER) {\n    #else\n    if (!u_view_panning && (abs(_theta) < TANGRAM_EPSILON)) {\n    #endif\n        vec2 _position_fract = fract((((position.xy / position.w) + 1.) * .5) * u_resolution);\n        vec2 _position_snap = position.xy + ((step(0.5, _position_fract) - _position_fract) * position.w * 2. / u_resolution);\n\n        // Animate the snapping to smooth the transition and make it less noticeable\n        #ifdef TANGRAM_VIEW_PAN_SNAP_RATE\n            position.xy = mix(position.xy, _position_snap, clamp(u_view_pan_snap_timer * TANGRAM_VIEW_PAN_SNAP_RATE, 0., 1.));\n        #else\n            position.xy = _position_snap;\n        #endif\n    }\n\n    gl_Position = position;\n}\n";
+var points_vs = "uniform vec2 u_resolution;\nuniform float u_time;\nuniform vec3 u_map_position;\nuniform vec4 u_tile_origin;\nuniform float u_tile_proxy_order_offset;\nuniform bool u_tile_fade_in;\nuniform float u_meters_per_pixel;\nuniform float u_device_pixel_ratio;\nuniform float u_visible_time;\nuniform bool u_view_panning;\nuniform float u_view_pan_snap_timer;\n\nuniform mat4 u_model;\nuniform mat4 u_modelView;\nuniform mat3 u_normalMatrix;\nuniform mat3 u_inverseNormalMatrix;\n\nattribute vec4 a_position;\nattribute vec4 a_shape;\nattribute vec4 a_color;\nattribute vec2 a_texcoord;\nattribute vec2 a_offset;\n\nuniform float u_point_type;\n\n#ifdef TANGRAM_CURVED_LABEL\n    attribute vec4 a_offsets;\n    attribute vec4 a_pre_angles;\n    attribute vec4 a_angles;\n#endif\n\nvarying vec4 v_color;\nvarying vec2 v_texcoord;\nvarying vec4 v_world_position;\nvarying float v_alpha_factor;\n\n#ifdef TANGRAM_HAS_SHADER_POINTS\n    attribute float a_outline_edge;\n    attribute vec4 a_outline_color;\n\n    varying float v_outline_edge;\n    varying vec4 v_outline_color;\n    varying float v_aa_offset;\n#endif\n\n#ifdef TANGRAM_SHOW_HIDDEN_LABELS\n    varying float v_label_hidden;\n#endif\n\n#define TANGRAM_PI 3.14159265359\n#define TANGRAM_NORMAL vec3(0., 0., 1.)\n\n#pragma tangram: attributes\n#pragma tangram: camera\n#pragma tangram: material\n#pragma tangram: lighting\n#pragma tangram: raster\n#pragma tangram: global\n\nvec2 rotate2D(vec2 _st, float _angle) {\n    return mat2(cos(_angle),-sin(_angle),\n                sin(_angle),cos(_angle)) * _st;\n}\n\n#ifdef TANGRAM_CURVED_LABEL\n    // Assumes stops are [0, 0.33, 0.66, 0.99];\n    float mix4linear(vec4 v, float x) {\n        x = clamp(x, 0., 1.);\n        return mix(mix(v[0], v[1], 3. * x),\n                   mix(v[1],\n                       mix(v[2], v[3], 3. * (max(x, .66) - .66)),\n                       3. * (clamp(x, .33, .66) - .33)),\n                   step(0.33, x)\n                );\n    }\n#endif\n\nvoid main() {\n    // Initialize globals\n    #pragma tangram: setup\n\n    // discard hidden labels by collapsing into degenerate triangle\n    #ifndef TANGRAM_SHOW_HIDDEN_LABELS\n        if (a_shape.w == 0.) {\n            gl_Position = vec4(0., 0., 0., 1.);\n            return;\n        }\n    #else\n        // highlight hidden label in fragment shader for debugging\n        if (a_shape.w == 0.) {\n            v_label_hidden = 1.; // label debug testing\n        }\n        else {\n            v_label_hidden = 0.;\n        }\n    #endif\n\n    v_alpha_factor = 1.0;\n    v_color = a_color;\n    v_texcoord = a_texcoord; // UV from vertex attribute\n\n    #ifdef TANGRAM_HAS_SHADER_POINTS\n        v_outline_color = a_outline_color;\n        v_outline_edge = a_outline_edge;\n\n        if (u_point_type == TANGRAM_POINT_TYPE_SHADER) { // shader point\n            // use point dimensions for UVs instead (ignore attribute), add antialiasing info for fragment shader\n            float _size = abs(a_shape.x / 128.); // radius in pixels\n            v_texcoord = sign(a_shape.xy) * (_size + 1.) / _size;\n            _size += 2.;\n            v_aa_offset = 2. / _size;\n        }\n    #endif\n\n    // Position\n    vec4 position = u_modelView * vec4(a_position.xyz, 1.);\n\n    // Apply positioning and scaling in screen space\n    vec2 _shape = a_shape.xy / 256.;                 // values have an 8-bit fraction\n    vec2 _offset = vec2(a_offset.x, -a_offset.y);    // flip y to make it point down\n    float _theta = a_shape.z / 4096.;\n\n    #ifdef TANGRAM_CURVED_LABEL\n        //TODO: potential bug? null is passed in for non-curved labels, otherwise the first offset will be 0\n        if (a_offsets[0] != 0.){\n            vec4 _angles_scaled = (TANGRAM_PI / 16384.) * a_angles;\n            vec4 _pre_angles_scaled = (TANGRAM_PI / 128.) * a_pre_angles;\n            vec4 _offsets_scaled = (1. / 64.) * a_offsets;\n\n            float _zoom = clamp(u_map_position.z - u_tile_origin.z, 0., 1.); //fract(u_map_position.z);\n            float _pre_angle = mix4linear(_pre_angles_scaled, _zoom);\n            float _angle = mix4linear(_angles_scaled, _zoom);\n            float _offset_curve = mix4linear(_offsets_scaled, _zoom);\n\n            _shape = rotate2D(_shape, _pre_angle); // rotate in place\n            _shape.x += _offset_curve;            // offset for curved label segment\n            _shape = rotate2D(_shape, _angle);     // rotate relative to curved label anchor\n            _shape += rotate2D(_offset, _theta);   // offset if specified in the scene file\n        }\n        else {\n            _shape = rotate2D(_shape + _offset, _theta);\n        }\n    #else\n        _shape = rotate2D(_shape + _offset, _theta);\n    #endif\n\n    // Fade in (if requested) based on time mesh has been visible.\n    // Value passed to fragment shader in the v_alpha_factor varying\n    #ifdef TANGRAM_FADE_IN_RATE\n        if (u_tile_fade_in) {\n            v_alpha_factor *= clamp(u_visible_time * TANGRAM_FADE_IN_RATE, 0., 1.);\n        }\n    #endif\n\n    // World coordinates for 3d procedural textures\n    v_world_position = u_model * position;\n    v_world_position.xy += _shape * u_meters_per_pixel;\n    v_world_position = wrapWorldPosition(v_world_position);\n\n    // Modify position before camera projection\n    #pragma tangram: position\n\n    cameraProjection(position);\n\n    #ifdef TANGRAM_LAYER_ORDER\n        // +1 is to keep all layers including proxies > 0\n        applyLayerOrder(a_position.w + u_tile_proxy_order_offset + 1., position);\n    #endif\n\n    // Apply pixel offset in screen-space\n    // Multiply by 2 is because screen is 2 units wide Normalized Device Coords (and u_resolution device pixels wide)\n    // Device pixel ratio adjustment is because shape is in logical pixels\n    position.xy += _shape * position.w * 2. * u_device_pixel_ratio / u_resolution;\n    #ifdef TANGRAM_HAS_SHADER_POINTS\n        if (u_point_type == TANGRAM_POINT_TYPE_SHADER) { // shader point\n            // enlarge by 1px to catch missed MSAA fragments\n            position.xy += sign(_shape) * position.w * u_device_pixel_ratio / u_resolution;\n        }\n    #endif\n\n    // Snap to pixel grid\n    // Only applied to fully upright sprites/labels (not shader-drawn points), while panning is not active\n    #ifdef TANGRAM_HAS_SHADER_POINTS\n    if (!u_view_panning && (abs(_theta) < TANGRAM_EPSILON) && u_point_type != TANGRAM_POINT_TYPE_SHADER) {\n    #else\n    if (!u_view_panning && (abs(_theta) < TANGRAM_EPSILON)) {\n    #endif\n        vec2 _position_fract = fract((((position.xy / position.w) + 1.) * .5) * u_resolution);\n        vec2 _position_snap = position.xy + ((step(0.5, _position_fract) - _position_fract) * position.w * 2. / u_resolution);\n\n        // Animate the snapping to smooth the transition and make it less noticeable\n        #ifdef TANGRAM_VIEW_PAN_SNAP_RATE\n            position.xy = mix(position.xy, _position_snap, clamp(u_view_pan_snap_timer * TANGRAM_VIEW_PAN_SNAP_RATE, 0., 1.));\n        #else\n            position.xy = _position_snap;\n        #endif\n    }\n\n    gl_Position = position;\n}\n";
 
-var points_fs = "uniform vec2 u_resolution;\nuniform float u_time;\nuniform vec3 u_map_position;\nuniform vec4 u_tile_origin;\nuniform float u_meters_per_pixel;\nuniform float u_device_pixel_ratio;\nuniform float u_visible_time;\n\nuniform mat3 u_normalMatrix;\nuniform mat3 u_inverseNormalMatrix;\n\nuniform sampler2D u_texture;\nuniform float u_point_type;\nuniform bool u_apply_color_blocks;\n\nvarying vec4 v_color;\nvarying vec2 v_texcoord;\nvarying vec4 v_world_position;\nvarying float v_alpha_factor;\n\n#ifdef TANGRAM_HAS_SHADER_POINTS\n    varying vec4 v_outline_color;\n    varying float v_outline_edge;\n    varying float v_aa_offset;\n#endif\n\n#ifdef TANGRAM_SHOW_HIDDEN_LABELS\n    varying float v_label_hidden;\n#endif\n\n#define TANGRAM_NORMAL vec3(0., 0., 1.)\n\n#pragma tangram: camera\n#pragma tangram: material\n#pragma tangram: lighting\n#pragma tangram: raster\n#pragma tangram: global\n\n#ifdef TANGRAM_HAS_SHADER_POINTS\n    //l is the distance from the center to the fragment, R is the radius of the drawn point\n    float _tangram_antialias(float l, float R){\n        float low  = R - v_aa_offset;\n        float high = R + v_aa_offset;\n        return 1. - smoothstep(low, high, l);\n    }\n#endif\n\nvoid main (void) {\n    // Initialize globals\n    #pragma tangram: setup\n\n    vec4 color = v_color;\n\n    #ifdef TANGRAM_HAS_SHADER_POINTS\n        // Only apply shader blocks to point, not to attached text (N.B.: for compatibility with ES)\n        if (u_point_type == TANGRAM_POINT_TYPE_TEXTURE) { // sprite texture\n            color *= texture2D(u_texture, v_texcoord);\n        }\n        else if (u_point_type == TANGRAM_POINT_TYPE_LABEL) { // label texture\n            color = texture2D(u_texture, v_texcoord);\n            color.rgb /= max(color.a, 0.001); // un-multiply canvas texture\n        }\n        else if (u_point_type == TANGRAM_POINT_TYPE_SHADER) { // shader point\n            // Mask of outermost circle, either outline or point boundary\n            float _d = length(v_texcoord); // distance to this fragment from the point center\n            float _outer_alpha = _tangram_antialias(_d, 1.);\n            float _fill_alpha = _tangram_antialias(_d, 1. - (v_outline_edge * 0.5)) * color.a;\n            float _stroke_alpha = (_outer_alpha - _tangram_antialias(_d, 1. - v_outline_edge)) * v_outline_color.a;\n\n            // Apply alpha compositing with stroke 'over' fill.\n            #ifdef TANGRAM_BLEND_ADD\n                color.a = _stroke_alpha + _fill_alpha;\n                color.rgb = color.rgb * _fill_alpha + v_outline_color.rgb * _stroke_alpha;\n            #else // TANGRAM_BLEND_OVERLAY (and fallback for not implemented blending modes)\n                color.a = _stroke_alpha + _fill_alpha * (1. - _stroke_alpha);\n                color.rgb = mix(color.rgb * _fill_alpha, v_outline_color.rgb, _stroke_alpha) / max(color.a, 0.001); // avoid divide by zero\n            #endif\n        }\n    #else\n        // If shader points not supported, assume label texture\n        color = texture2D(u_texture, v_texcoord);\n        color.rgb /= max(color.a, 0.001); // un-multiply canvas texture\n    #endif\n\n    // Shader blocks for color/filter are only applied for sprites, shader points, and standalone text,\n    // NOT for text attached to a point (N.B.: for compatibility with ES)\n    if (u_apply_color_blocks) {\n        #pragma tangram: color\n        #pragma tangram: filter\n    }\n\n    color.a *= v_alpha_factor;\n\n    // highlight hidden label in fragment shader for debugging\n    #ifdef TANGRAM_SHOW_HIDDEN_LABELS\n        if (v_label_hidden > 0.) {\n            color.a *= 0.5;\n            color.rgb = vec3(1., 0., 0.);\n        }\n    #endif\n\n    // Use alpha test as a lower-quality substitute\n    // For opaque and translucent: avoid transparent pixels writing to depth buffer, obscuring geometry underneath\n    // For multiply: avoid transparent pixels multiplying geometry underneath to zero/full black\n    #if defined(TANGRAM_BLEND_OPAQUE) || defined(TANGRAM_BLEND_TRANSLUCENT) || defined(TANGRAM_BLEND_MULTIPLY)\n        if (color.a < TANGRAM_ALPHA_TEST) {\n            discard;\n        }\n    #endif\n\n    gl_FragColor = color;\n}\n";
+var points_fs = "uniform vec2 u_resolution;\nuniform float u_time;\nuniform vec3 u_map_position;\nuniform vec4 u_tile_origin;\nuniform float u_meters_per_pixel;\nuniform float u_device_pixel_ratio;\nuniform float u_visible_time;\n\nuniform mat3 u_normalMatrix;\nuniform mat3 u_inverseNormalMatrix;\n\nuniform sampler2D u_texture;\nuniform float u_point_type;\nuniform bool u_apply_color_blocks;\n\nvarying vec4 v_color;\nvarying vec2 v_texcoord;\nvarying vec4 v_world_position;\nvarying float v_alpha_factor;\n\n#ifdef TANGRAM_HAS_SHADER_POINTS\n    varying vec4 v_outline_color;\n    varying float v_outline_edge;\n    varying float v_aa_offset;\n#endif\n\n#ifdef TANGRAM_SHOW_HIDDEN_LABELS\n    varying float v_label_hidden;\n#endif\n\n#define TANGRAM_NORMAL vec3(0., 0., 1.)\n\n#pragma tangram: attributes\n#pragma tangram: camera\n#pragma tangram: material\n#pragma tangram: lighting\n#pragma tangram: raster\n#pragma tangram: global\n\n#ifdef TANGRAM_HAS_SHADER_POINTS\n    //l is the distance from the center to the fragment, R is the radius of the drawn point\n    float _tangram_antialias(float l, float R){\n        float low  = R - v_aa_offset;\n        float high = R + v_aa_offset;\n        return 1. - smoothstep(low, high, l);\n    }\n#endif\n\nvoid main (void) {\n    // Initialize globals\n    #pragma tangram: setup\n\n    vec4 color = v_color;\n\n    #ifdef TANGRAM_HAS_SHADER_POINTS\n        // Only apply shader blocks to point, not to attached text (N.B.: for compatibility with ES)\n        if (u_point_type == TANGRAM_POINT_TYPE_TEXTURE) { // sprite texture\n            color *= texture2D(u_texture, v_texcoord);\n        }\n        else if (u_point_type == TANGRAM_POINT_TYPE_LABEL) { // label texture\n            color = texture2D(u_texture, v_texcoord);\n            color.rgb /= max(color.a, 0.001); // un-multiply canvas texture\n        }\n        else if (u_point_type == TANGRAM_POINT_TYPE_SHADER) { // shader point\n            // Mask of outermost circle, either outline or point boundary\n            float _d = length(v_texcoord); // distance to this fragment from the point center\n            float _outer_alpha = _tangram_antialias(_d, 1.);\n            float _fill_alpha = _tangram_antialias(_d, 1. - (v_outline_edge * 0.5)) * color.a;\n            float _stroke_alpha = (_outer_alpha - _tangram_antialias(_d, 1. - v_outline_edge)) * v_outline_color.a;\n\n            // Apply alpha compositing with stroke 'over' fill.\n            #ifdef TANGRAM_BLEND_ADD\n                color.a = _stroke_alpha + _fill_alpha;\n                color.rgb = color.rgb * _fill_alpha + v_outline_color.rgb * _stroke_alpha;\n            #else // TANGRAM_BLEND_OVERLAY (and fallback for not implemented blending modes)\n                color.a = _stroke_alpha + _fill_alpha * (1. - _stroke_alpha);\n                color.rgb = mix(color.rgb * _fill_alpha, v_outline_color.rgb, _stroke_alpha) / max(color.a, 0.001); // avoid divide by zero\n            #endif\n        }\n    #else\n        // If shader points not supported, assume label texture\n        color = texture2D(u_texture, v_texcoord);\n        color.rgb /= max(color.a, 0.001); // un-multiply canvas texture\n    #endif\n\n    // Shader blocks for color/filter are only applied for sprites, shader points, and standalone text,\n    // NOT for text attached to a point (N.B.: for compatibility with ES)\n    if (u_apply_color_blocks) {\n        #pragma tangram: color\n        #pragma tangram: filter\n    }\n\n    color.a *= v_alpha_factor;\n\n    // highlight hidden label in fragment shader for debugging\n    #ifdef TANGRAM_SHOW_HIDDEN_LABELS\n        if (v_label_hidden > 0.) {\n            color.a *= 0.5;\n            color.rgb = vec3(1., 0., 0.);\n        }\n    #endif\n\n    // Use alpha test as a lower-quality substitute\n    // For opaque and translucent: avoid transparent pixels writing to depth buffer, obscuring geometry underneath\n    // For multiply: avoid transparent pixels multiplying geometry underneath to zero/full black\n    #if defined(TANGRAM_BLEND_OPAQUE) || defined(TANGRAM_BLEND_TRANSLUCENT) || defined(TANGRAM_BLEND_MULTIPLY)\n        if (color.a < TANGRAM_ALPHA_TEST) {\n            discard;\n        }\n    #endif\n\n    // Make points more visible in wireframe debug mode\n    #ifdef TANGRAM_WIREFRAME\n        color = vec4(vec3(0.5), 1.); // use gray outline for textured points\n        #ifdef TANGRAM_HAS_SHADER_POINTS\n            if (u_point_type == TANGRAM_POINT_TYPE_SHADER) {\n                color = vec4(v_color.rgb, 1.); // use original vertex color outline for shader points\n            }\n        #endif\n    #endif\n\n    gl_FragColor = color;\n}\n";
 
 // Point + text label rendering style
 const PLACEMENT$1 = LabelPoint.PLACEMENT;
 const Points = Object.create(Style);
-Points.variants = {}; // mesh variants by variant key
-
-Points.vertex_layouts = {}; // vertex layouts by variant key
-
 const SHADER_POINT_VARIANT = '__shader_point'; // texture types
 
 const TANGRAM_POINT_TYPE_TEXTURE = 1; // style texture/sprites (assigned by user)
@@ -13743,11 +13816,7 @@ Object.assign(Points, {
   blend: 'overlay',
 
   // overlays drawn on top of all other styles, with blending
-  init(options) {
-    if (options === void 0) {
-      options = {};
-    }
-
+  init(options = {}) {
     Style.init.call(this, options); // Shader defines
 
     this.setupDefines(); // Include code for SDF-drawn shader points
@@ -13792,6 +13861,11 @@ Object.assign(Points, {
 
     if (debugSettings$1.show_hidden_labels === true) {
       this.defines.TANGRAM_SHOW_HIDDEN_LABELS = true;
+    } // Enable wireframe for debugging
+
+
+    if (debugSettings$1.wireframe === true) {
+      this.defines.TANGRAM_WIREFRAME = true;
     }
   },
 
@@ -13821,8 +13895,10 @@ Object.assign(Points, {
 
     if (!style.color && !style.texture) {
       return;
-    } // optional sprite and texture
+    }
 
+    style.alpha = StyleParser.evalCachedProperty(draw.alpha, context); // optional alpha override
+    // optional sprite and texture
 
     let sprite_info;
 
@@ -13863,10 +13939,13 @@ Object.assign(Points, {
     style.outline_edge_pct = 0;
 
     if (style.outline_width && style.outline_color) {
+      // adjust size and UVs for outline
       let outline_width = style.outline_width;
       style.size[0] += outline_width;
       style.size[1] += outline_width;
       style.outline_edge_pct = outline_width / Math.min(style.size[0], style.size[1]) * 2; // UV distance at which outline starts
+
+      style.outline_alpha = StyleParser.evalCachedProperty(draw.outline.alpha, context); // optional alpha override
     } // size will be scaled to 16-bit signed int, so max allowed width + height of 256 pixels
 
 
@@ -14040,7 +14119,11 @@ Object.assign(Points, {
       }
     }); // Collide both points and text, then build features
 
-    const _ref = await Promise.all([// Points
+    const [, {
+      labels,
+      texts,
+      textures
+    }] = await Promise.all([// Points
     Collision.collide(point_objs, this.collision_group_points, tile.id).then(point_objs => {
       point_objs.forEach(q => {
         this.feature_style = q.style;
@@ -14050,12 +14133,7 @@ Object.assign(Points, {
         Style.addFeature.call(this, q.feature, q.draw, q.context);
       });
     }), // Labels
-    this.collideAndRenderTextLabels(tile, this.collision_group_text, text_objs)]),
-          _ref$ = _ref[1],
-          labels = _ref$.labels,
-          texts = _ref$.texts,
-          textures = _ref$.textures; // Process labels
-
+    this.collideAndRenderTextLabels(tile, this.collision_group_text, text_objs)]); // Process labels
 
     if (labels && texts) {
       // Build queued features
@@ -14090,12 +14168,14 @@ Object.assign(Points, {
 
   _preprocess(draw) {
     draw.color = StyleParser.createColorPropertyCache(draw.color);
+    draw.alpha = StyleParser.createPropertyCache(draw.alpha);
     draw.texture = draw.texture !== undefined ? draw.texture : this.texture; // optional or default texture
 
     draw.blend_order = this.getBlendOrderForDraw(draw); // from draw block, or fall back on default style blend order
 
     if (draw.outline) {
       draw.outline.color = StyleParser.createColorPropertyCache(draw.outline.color);
+      draw.outline.alpha = StyleParser.createPropertyCache(draw.outline.alpha);
       draw.outline.width = StyleParser.createPropertyCache(draw.outline.width, StyleParser.parsePositiveNumber);
     }
 
@@ -14308,7 +14388,7 @@ Object.assign(Points, {
    * A "template" that sets constant attibutes for each vertex, which is then modified per vertex or per feature.
    * A plain JS array matching the order of the vertex layout.
    */
-  makeVertexTemplate(style, mesh) {
+  makeVertexTemplate(style, mesh, add_custom_attribs = true) {
     let i = 0; // a_position.xyz - vertex position
     // a_position.w - layer order
 
@@ -14338,7 +14418,7 @@ Object.assign(Points, {
     this.vertex_template[i++] = color[0] * 255;
     this.vertex_template[i++] = color[1] * 255;
     this.vertex_template[i++] = color[2] * 255;
-    this.vertex_template[i++] = color[3] * 255; // a_selection_color.rgba - selection color
+    this.vertex_template[i++] = (style.alpha != null ? style.alpha : color[3]) * 255; // a_selection_color.rgba - selection color
 
     if (mesh.variant.selection) {
       this.vertex_template[i++] = style.selection_color[0] * 255;
@@ -14354,9 +14434,13 @@ Object.assign(Points, {
       this.vertex_template[i++] = outline_color[0] * 255;
       this.vertex_template[i++] = outline_color[1] * 255;
       this.vertex_template[i++] = outline_color[2] * 255;
-      this.vertex_template[i++] = outline_color[3] * 255; // a_outline_edge - point outline edge (as % of point size where outline begins)
+      this.vertex_template[i++] = (style.outline_alpha != null ? style.outline_alpha : outline_color[3]) * 255; // a_outline_edge - point outline edge (as % of point size where outline begins)
 
       this.vertex_template[i++] = style.outline_edge_pct || StyleParser.defaults.outline.width;
+    }
+
+    if (add_custom_attribs) {
+      this.addCustomAttributesToVertexTemplate(style, i);
     }
 
     return this.vertex_template;
@@ -14558,7 +14642,7 @@ Object.assign(Points, {
   // Create or return desired vertex layout permutation based on flags
   vertexLayoutForMeshVariant(variant) {
     // Vertex layout only depends on shader point flag, so using it as layout key to avoid duplicate layouts
-    if (Points.vertex_layouts[variant.shader_point] == null) {
+    if (this.vertex_layouts[variant.shader_point] == null) {
       // Attributes for this mesh variant
       // Optional attributes have placeholder values assigned with `static` parameter
       // TODO: could support optional attributes for selection and offset, but may not be worth it
@@ -14608,10 +14692,11 @@ Object.assign(Points, {
         normalized: false,
         static: variant.shader_point ? null : 0
       }];
-      Points.vertex_layouts[variant.shader_point] = new VertexLayout(attribs);
+      this.addCustomAttributesToAttributeList(attribs);
+      this.vertex_layouts[variant.shader_point] = new VertexLayout(attribs);
     }
 
-    return Points.vertex_layouts[variant.shader_point];
+    return this.vertex_layouts[variant.shader_point];
   },
 
   // Override
@@ -14620,8 +14705,8 @@ Object.assign(Points, {
 
     const key = texture + '/' + draw.blend_order;
 
-    if (Points.variants[key] == null) {
-      Points.variants[key] = {
+    if (this.variants[key] == null) {
+      this.variants[key] = {
         key,
         selection: 1,
         // TODO: make this vary by draw params
@@ -14633,15 +14718,11 @@ Object.assign(Points, {
       };
     }
 
-    return Points.variants[key]; // return pre-calculated mesh variant
+    return this.variants[key]; // return pre-calculated mesh variant
   },
 
   // Override
-  makeMesh(vertex_data, vertex_elements, options) {
-    if (options === void 0) {
-      options = {};
-    }
-
+  makeMesh(vertex_data, vertex_elements, options = {}) {
     // Add label fade time
     options = Object.assign({}, options, {
       fade_in_time: this.fade_in_time
@@ -14674,7 +14755,7 @@ const VERTICAL_ANGLE_TOLERANCE = 0.01; // nearly vertical lines considered verti
 let LabelLine = {
   // Given a label's bounding box size and size of broken up individual segments
   // return a label that fits along the line geometry that is either straight (preferred) or curved (if straight tolerances aren't met)
-  create: function create(segment_sizes, total_size, line, layout) {
+  create: function (segment_sizes, total_size, line, layout) {
     // The passes done for fitting a label, and provided tolerances for each pass
     // First straight is chosen with a low tolerance. Then curved. Then straight with a higher tolerance.
     const passes = [{
@@ -14822,11 +14903,7 @@ class LabelLineBase {
   } // Checks each segment to see if it should be discarded (via collision). If any segment fails this test, they all fail.
 
 
-  discard(bboxes, exclude) {
-    if (exclude === void 0) {
-      exclude = null;
-    }
-
+  discard(bboxes, exclude = null) {
     if (this.throw_away) {
       return true;
     }
@@ -14901,12 +14978,8 @@ class LabelLineStraight extends LabelLineBase {
     let flipped; // boolean indicating if orientation of line is changed
     // Make new copy of line, with consistent orientation
 
-    var _LabelLineBase$splitL = LabelLineBase.splitLineByOrientation(line);
+    [line, flipped] = LabelLineBase.splitLineByOrientation(line); // matches for "left" or "right" labels where the offset angle is dependent on the geometry
 
-    line = _LabelLineBase$splitL[0];
-    flipped = _LabelLineBase$splitL[1];
-
-    // matches for "left" or "right" labels where the offset angle is dependent on the geometry
     if (typeof layout.orientation === 'number') {
       this.offset[1] += ORIENTED_LABEL_OFFSET_FACTOR * (size[1] - layout.vertical_buffer); // if line is flipped, or the orientation is "left" (-1), flip the offset's y-axis
 
@@ -15034,12 +15107,8 @@ class LabelLineCurved extends LabelLineBase {
 
     let height = height_px * upp; // Make new copy of line, with consistent orientation
 
-    var _LabelLineBase$splitL2 = LabelLineBase.splitLineByOrientation(line);
+    [line, flipped] = LabelLineBase.splitLineByOrientation(line); // matches for "left" or "right" labels where the offset angle is dependent on the geometry
 
-    line = _LabelLineBase$splitL2[0];
-    flipped = _LabelLineBase$splitL2[1];
-
-    // matches for "left" or "right" labels where the offset angle is dependent on the geometry
     if (typeof layout.orientation === 'number') {
       this.offset[1] += ORIENTED_LABEL_OFFSET_FACTOR * (height_px - layout.vertical_buffer); // if line is flipped, or the orientation is "left" (-1), flip the offset's y-axis
 
@@ -15091,18 +15160,15 @@ class LabelLineCurved extends LabelLineBase {
       for (var j = 0; j < STOPS.length; j++) {
         let stop = STOPS[j]; // scale the line geometry by the zoom magnification
 
-        let _LabelLineCurved$scal = LabelLineCurved.scaleLine(stop, line),
-            new_line = _LabelLineCurved$scal[0],
-            line_lengths = _LabelLineCurved$scal[1];
-
+        let [new_line, _line_lengths] = LabelLineCurved.scaleLine(stop, line);
         anchor = new_line[anchor_index]; // calculate label data relative to anchor position
 
-        let _LabelLineCurved$plac = LabelLineCurved.placeAtIndex(anchor_index, new_line, line_lengths, label_lengths),
-            positions = _LabelLineCurved$plac.positions,
-            offsets = _LabelLineCurved$plac.offsets,
-            angles = _LabelLineCurved$plac.angles,
-            pre_angles = _LabelLineCurved$plac.pre_angles; // translate 2D offsets into "polar coordinates"" (1D distances with angles)
-
+        let {
+          positions,
+          offsets,
+          angles,
+          pre_angles
+        } = LabelLineCurved.placeAtIndex(anchor_index, new_line, _line_lengths, label_lengths); // translate 2D offsets into "polar coordinates"" (1D distances with angles)
 
         let offsets1d = offsets.map(offset => {
           return Math.sqrt(offset[0] * offset[0] + offset[1] * offset[1]) / upp;
@@ -15112,11 +15178,11 @@ class LabelLineCurved extends LabelLineBase {
           // use average angle for a global label offset (if offset is specified)
           this.angle = 1 / angles.length * angles.reduce((prev, next) => prev + next); // calculate bounding boxes for collision at zoom level 0
 
-          for (let i = 0; i < positions.length; i++) {
-            let position = positions[i];
-            let pre_angle = pre_angles[i];
-            let width = label_lengths[i];
-            let angle_segment = pre_angle + angles[i];
+          for (let _i = 0; _i < positions.length; _i++) {
+            let position = positions[_i];
+            let pre_angle = pre_angles[_i];
+            let width = label_lengths[_i];
+            let angle_segment = pre_angle + angles[_i];
             let angle_offset = this.angle;
             let obb = LabelLineBase.createOBB(position, width, height, angle_segment, angle_offset, this.offset, upp);
             let aabb = obb.getExtent();
@@ -15246,18 +15312,11 @@ class LabelLineCurved extends LabelLineBase {
   static placeAtIndex(anchor_index, line, line_lengths, label_lengths) {
     let anchor = line[anchor_index]; // Use flat coordinates. Get nearest line vertex index, and offset from the vertex for all labels.
 
-    let _LabelLineCurved$getI = LabelLineCurved.getIndicesAndOffsets(anchor_index, line_lengths, label_lengths),
-        indices = _LabelLineCurved$getI[0],
-        relative_offsets = _LabelLineCurved$getI[1]; // get 2D positions based on "flat" indices and offsets
-
+    let [indices, relative_offsets] = LabelLineCurved.getIndicesAndOffsets(anchor_index, line_lengths, label_lengths); // get 2D positions based on "flat" indices and offsets
 
     let positions = LabelLineCurved.getPositionsFromIndicesAndOffsets(line, indices, relative_offsets); // get 2d offsets, angles and pre_angles relative to anchor
 
-    let _LabelLineCurved$getA = LabelLineCurved.getAnglesFromIndicesAndOffsets(anchor, indices, line, positions),
-        offsets = _LabelLineCurved$getA[0],
-        angles = _LabelLineCurved$getA[1],
-        pre_angles = _LabelLineCurved$getA[2];
-
+    let [offsets, angles, pre_angles] = LabelLineCurved.getAnglesFromIndicesAndOffsets(anchor, indices, line, positions);
     return {
       positions,
       offsets,
@@ -15403,18 +15462,12 @@ function getAbsAngleDiff(angle1, angle2) {
 
 // Text rendering style
 let TextStyle = Object.create(Points);
-TextStyle.vertex_layouts = {}; // vertex layouts by variant key
-
 Object.assign(TextStyle, {
   name: 'text',
   super: Points,
   built_in: true,
 
-  init(options) {
-    if (options === void 0) {
-      options = {};
-    }
-
+  init(options = {}) {
     Style.init.call(this, options); // Shader defines
 
     this.setupDefines(); // Omit some code for SDF-drawn shader points
@@ -15430,7 +15483,9 @@ Object.assign(TextStyle, {
    * A plain JS array matching the order of the vertex layout.
    */
   makeVertexTemplate(style, mesh) {
-    this.super.makeVertexTemplate.apply(this, arguments);
+    this.super.makeVertexTemplate.call(this, style, mesh,
+    /* add_custom_attribs */
+    false);
     let vertex_layout = mesh.vertex_data.vertex_layout;
     let i = vertex_layout.index.a_pre_angles; // a_pre_angles.xyzw - rotation of entire curved label
     // a_angles.xyzw - angle of each curved label segment
@@ -15440,6 +15495,7 @@ Object.assign(TextStyle, {
       this.vertex_template[i++] = 0;
     }
 
+    this.addCustomAttributesToVertexTemplate(style, i);
     return this.vertex_template;
   },
 
@@ -15492,11 +15548,11 @@ Object.assign(TextStyle, {
   async endData(tile) {
     let queue = this.queues[tile.id];
     delete this.queues[tile.id];
-
-    const _ref = await this.collideAndRenderTextLabels(tile, this.name, queue),
-          labels = _ref.labels,
-          texts = _ref.texts,
-          textures = _ref.textures;
+    const {
+      labels,
+      texts,
+      textures
+    } = await this.collideAndRenderTextLabels(tile, this.name, queue);
 
     if (labels && texts) {
       this.texts[tile.id] = texts; // Build queued features
@@ -15670,7 +15726,7 @@ Object.assign(TextStyle, {
   // Create or return vertex layout
   vertexLayoutForMeshVariant(variant) {
     // Vertex layout only depends on shader point flag, so using it as layout key to avoid duplicate layouts
-    if (TextStyle.vertex_layouts[variant.shader_point] == null) {
+    if (this.vertex_layouts[variant.shader_point] == null) {
       // TODO: could make selection, offset, and curved label attribs optional, but may not be worth it
       // since text points generally don't consume much memory anyway
       const attribs = [{
@@ -15720,10 +15776,11 @@ Object.assign(TextStyle, {
         type: gl$1.UNSIGNED_SHORT,
         normalized: false
       }];
-      TextStyle.vertex_layouts[variant.shader_point] = new VertexLayout(attribs);
+      this.addCustomAttributesToAttributeList(attribs);
+      this.vertex_layouts[variant.shader_point] = new VertexLayout(attribs);
     }
 
-    return TextStyle.vertex_layouts[variant.shader_point];
+    return this.vertex_layouts[variant.shader_point];
   }
 
 });
@@ -15757,7 +15814,6 @@ var selection_globals_source = "// Vertex attribute + varying for feature select
 
 var selection_vertex_source = "// Selection pass-specific rendering\n#if defined(TANGRAM_FEATURE_SELECTION) && defined(TANGRAM_VERTEX_SHADER)\n    if (a_selection_color.rgb == vec3(0.)) {\n        // Discard by forcing invalid triangle if we're in the feature\n        // selection pass but have no selection info\n        // TODO: in some cases we may actually want non-selectable features to occlude selectable ones?\n        gl_Position = vec4(0., 0., 0., 1.);\n        return;\n    }\n    v_selection_color = a_selection_color;\n#endif\n";
 
-// Manage rendering styles
 class StyleManager {
   constructor() {
     this.styles = {};
@@ -15844,9 +15900,7 @@ class StyleManager {
   updateActiveBlendOrders(tiles) {
     const orders = [];
     tiles.forEach(tile => {
-      Object.entries(tile.meshes).forEach((_ref) => {
-        let style = _ref[0],
-            style_meshes = _ref[1];
+      Object.entries(tile.meshes).forEach(([style, style_meshes]) => {
         // for each tile's set of meshes, keyed by style name
         style_meshes.forEach(mesh => {
           // for each style's list of meshes
@@ -15903,10 +15957,10 @@ class StyleManager {
     style.dash = sources.map(x => x.dash).filter(x => x != null).pop();
     style.dash_background_color = sources.map(x => x.dash_background_color).filter(x => x != null).pop();
 
-    if (sources.some(x => x.hasOwnProperty('blend') && x.blend)) {
+    if (sources.some(x => Object.prototype.hasOwnProperty.call(x, 'blend') && x.blend)) {
       // only mix blend if explicitly set, otherwise let base style choose blending mode
       // hasOwnProperty check gives preference to base style prototype
-      style.blend = sources.map(x => x.hasOwnProperty('blend') && x.blend).filter(x => x).pop();
+      style.blend = sources.map(x => Object.prototype.hasOwnProperty.call(x, 'blend') && x.blend).filter(x => x).pop();
     }
 
     style.blend_order = sources.map(x => x.blend_order).filter(x => x != null).pop(); // Merges - property-specific rules for merging values
@@ -15932,7 +15986,9 @@ class StyleManager {
     let shader_merges = sources.map(x => x.shaders).filter(x => x); // just the source styles with shader properties
     // Defines
 
-    shaders.defines = Object.assign({}, ...shader_merges.map(x => x.defines).filter(x => x)); // Uniforms
+    shaders.defines = Object.assign({}, ...shader_merges.map(x => x.defines).filter(x => x)); // Attributes
+
+    shaders.attributes = Object.assign({}, ...shader_merges.map(x => x.attributes).filter(x => x)); // Uniforms
 
     shaders.uniforms = {}; // uniforms for this style, both explicitly defined, and mixed from other styles
 
@@ -15951,7 +16007,7 @@ class StyleManager {
         Object.defineProperty(shaders.uniforms, u, {
           enumerable: true,
           configurable: true,
-          get: function get() {
+          get: function () {
             // Uniform is explicitly defined on this style
             if (shaders._uniforms[u] !== undefined) {
               return shaders._uniforms[u];
@@ -15964,7 +16020,7 @@ class StyleManager {
 
             return undefined;
           },
-          set: function set(v) {
+          set: function (v) {
             shaders._uniforms[u] = v;
           }
         });
@@ -16048,11 +16104,7 @@ class StyleManager {
   // styles: working set of styles being built (used for mixing in existing styles)
 
 
-  create(name, config, styles) {
-    if (styles === void 0) {
-      styles = {};
-    }
-
+  create(name, config, styles = {}) {
     let style = mergeObjects({}, config); // deep copy
 
     style.name = name; // Style mixins
@@ -16071,10 +16123,30 @@ class StyleManager {
   } // Called to create and initialize styles
 
 
-  build(styles) {
+  build(styles_defs) {
+    const styles = _extends({}, styles_defs); // copy to avoid modifying underlying object
     // Un-register existing styles from cross-thread communication
+
+
     if (this.styles) {
       Object.values(this.styles).forEach(s => WorkerBroker$1.removeTarget(s.main_thread_target));
+    } // Add default blend/base style pairs as needed
+
+
+    const blends = ['opaque', 'add', 'multiply', 'overlay', 'inlay', 'translucent'];
+    const bases = ['polygons', 'lines', 'points', 'text', 'raster'];
+
+    for (const blend of blends) {
+      for (const base of bases) {
+        const style = blend + '_' + base;
+
+        if (styles[style] == null) {
+          styles[style] = {
+            base,
+            blend
+          };
+        }
+      }
     } // Sort styles by dependency, then build them
 
 
@@ -16097,11 +16169,7 @@ class StyleManager {
   } // Initialize all styles
 
 
-  initStyles(scene) {
-    if (scene === void 0) {
-      scene = {};
-    }
-
+  initStyles(scene = {}) {
     // Initialize all
     for (let sname in this.styles) {
       this.styles[sname].init(scene);
@@ -16409,17 +16477,18 @@ function mergeTrees(matchingTrees, group) {
 const blacklist = ['any', 'all', 'not', 'none'];
 
 class Layer {
-  constructor(_ref) {
-    let layer = _ref.layer,
-        name = _ref.name,
-        parent = _ref.parent,
-        draw = _ref.draw,
-        visible = _ref.visible,
-        enabled = _ref.enabled,
-        filter = _ref.filter,
-        exclusive = _ref.exclusive,
-        priority = _ref.priority,
-        styles = _ref.styles;
+  constructor({
+    layer,
+    name,
+    parent,
+    draw,
+    visible,
+    enabled,
+    filter,
+    exclusive,
+    priority,
+    styles
+  }) {
     this.id = Layer.id++;
     this.config_data = layer.data;
     this.parent = parent;
@@ -16755,11 +16824,7 @@ function parseLayerNode(name, layer, parent, styles) {
     parent,
     styles
   };
-
-  let _groupProps = groupProps(layer),
-      reserved = _groupProps[0],
-      children = _groupProps[1];
-
+  let [reserved, children] = groupProps(layer);
   let empty = isEmpty(children);
   let Create;
 
@@ -16894,12 +16959,13 @@ class Tile {
       coords: object with {x, y, z} properties identifying tile coordinate location
       worker: web worker to handle tile construction
   */
-  constructor(_ref) {
-    let coords = _ref.coords,
-        style_z = _ref.style_z,
-        source = _ref.source,
-        workers = _ref.workers,
-        view = _ref.view;
+  constructor({
+    coords,
+    style_z,
+    source,
+    workers,
+    view
+  }) {
     this.id = id++;
     this.view = view;
     this.source = source;
@@ -17019,19 +17085,13 @@ class Tile {
     this.worker = workers[this.worker_id];
   }
 
-  workerMessage() {
-    for (var _len = arguments.length, message = new Array(_len), _key = 0; _key < _len; _key++) {
-      message[_key] = arguments[_key];
-    }
-
+  workerMessage(...message) {
     return WorkerBroker$1.postMessage(this.worker, ...message);
   }
 
-  build(generation, _temp) {
-    let _ref2 = _temp === void 0 ? {} : _temp,
-        _ref2$fade_in = _ref2.fade_in,
-        fade_in = _ref2$fade_in === void 0 ? true : _ref2$fade_in;
-
+  build(generation, {
+    fade_in = true
+  } = {}) {
     this.generation = generation;
     this.fade_in = fade_in;
 
@@ -17070,11 +17130,12 @@ class Tile {
   // Returns a set of tile keys that should be sent to the main thread (so that we can minimize data exchange between worker and main thread)
 
 
-  static buildGeometry(tile, _ref3) {
-    let scene_id = _ref3.scene_id,
-        layers = _ref3.layers,
-        styles = _ref3.styles,
-        global = _ref3.global;
+  static buildGeometry(tile, {
+    scene_id,
+    layers,
+    styles,
+    global
+  }) {
     let data = tile.source_data;
     tile.debug.building = +new Date();
     tile.debug.feature_count = 0;
@@ -17212,18 +17273,19 @@ class Tile {
   } // Build a single group of styles
 
 
-  static async buildStyleGroup(_ref4) {
-    let group_name = _ref4.group_name,
-        groups = _ref4.groups,
-        tile = _ref4.tile,
-        progress = _ref4.progress,
-        scene_id = _ref4.scene_id;
+  static async buildStyleGroup({
+    group_name,
+    groups,
+    tile,
+    progress,
+    scene_id
+  }) {
     const group = groups[group_name];
     const mesh_data = {};
 
     try {
       // For each group, build all styles in the group
-      await Promise.all(group.map(async style => {
+      await Promise.all(group.map(async function (style) {
         const style_data = await style.endData(tile);
 
         if (style_data) {
@@ -17277,12 +17339,10 @@ class Tile {
         }
 
         for (const layer in source_data.layers) {
-          if (source_data.layers[layer].features) {
-            layers.push({
-              layer,
-              geom: source_data.layers[layer]
-            });
-          }
+          layers.push({
+            layer,
+            geom: source_data.layers[layer]
+          });
         }
       } // If no source layer specified, and a default data source layer exists
       else if (!source_config.layer && source_data.layers._default) {
@@ -17304,12 +17364,10 @@ class Tile {
             } // If multiple source layers are specified by name, combine them
             else if (Array.isArray(source_config.layer)) {
                 source_config.layer.forEach(layer => {
-                  if (source_data.layers[layer] && source_data.layers[layer].features) {
-                    layers.push({
-                      layer,
-                      geom: source_data.layers[layer]
-                    });
-                  }
+                  layers.push({
+                    layer,
+                    geom: source_data.layers[layer]
+                  });
                 });
               }
     }
@@ -17501,9 +17559,10 @@ class Tile {
   } // Update model matrix and tile uniforms
 
 
-  setupProgram(_ref5, program) {
-    let model = _ref5.model,
-        model32 = _ref5.model32;
+  setupProgram({
+    model,
+    model32
+  }, program) {
     // Tile origin
     program.uniform('4fv', 'u_tile_origin', [this.min.x, this.min.y, this.style_z, this.coords.z]);
     program.uniform('1f', 'u_tile_proxy_order_offset', this.proxy_order_offset); // Model - transform tile space into world space (meters, absolute mercator position)
@@ -19014,8 +19073,13 @@ class MVTSource extends NetworkTileSource {
         geometry.coordinates = coordinates;
 
         if (VectorTileFeature$1.types[feature.type] === 'Point') {
-          geometry.type = 'Point';
-          geometry.coordinates = geometry.coordinates[0][0];
+          if (coordinates.length === 1) {
+            geometry.type = 'Point';
+            geometry.coordinates = geometry.coordinates[0][0];
+          } else {
+            geometry.type = 'MultiPoint';
+            geometry.coordinates = geometry.coordinates[0];
+          }
         } else if (VectorTileFeature$1.types[feature.type] === 'LineString') {
           if (coordinates.length === 1) {
             geometry.type = 'LineString';
@@ -19109,58 +19173,50 @@ function decodeMultiPolygon(geom) {
 }
 DataSource.register('MVT', () => MVTSource);
 
-var simplify_1 = simplify;
-
 // calculate simplification data using optimized Douglas-Peucker algorithm
 
-function simplify(points, tolerance) {
+function simplify(coords, first, last, sqTolerance) {
+    var maxSqDist = sqTolerance;
+    var mid = (last - first) >> 1;
+    var minPosToMid = last - first;
+    var index;
 
-    var sqTolerance = tolerance * tolerance,
-        len = points.length,
-        first = 0,
-        last = len - 1,
-        stack = [],
-        i, maxSqDist, sqDist, index;
+    var ax = coords[first];
+    var ay = coords[first + 1];
+    var bx = coords[last];
+    var by = coords[last + 1];
 
-    // always retain the endpoints (1 is the max value)
-    points[first][2] = 1;
-    points[last][2] = 1;
+    for (var i = first + 3; i < last; i += 3) {
+        var d = getSqSegDist(coords[i], coords[i + 1], ax, ay, bx, by);
 
-    // avoid recursion by using a stack
-    while (last) {
+        if (d > maxSqDist) {
+            index = i;
+            maxSqDist = d;
 
-        maxSqDist = 0;
-
-        for (i = first + 1; i < last; i++) {
-            sqDist = getSqSegDist(points[i], points[first], points[last]);
-
-            if (sqDist > maxSqDist) {
+        } else if (d === maxSqDist) {
+            // a workaround to ensure we choose a pivot close to the middle of the list,
+            // reducing recursion depth, for certain degenerate inputs
+            // https://github.com/mapbox/geojson-vt/issues/104
+            var posToMid = Math.abs(i - mid);
+            if (posToMid < minPosToMid) {
                 index = i;
-                maxSqDist = sqDist;
+                minPosToMid = posToMid;
             }
         }
+    }
 
-        if (maxSqDist > sqTolerance) {
-            points[index][2] = maxSqDist; // save the point importance in squared pixels as a z coordinate
-            stack.push(first);
-            stack.push(index);
-            first = index;
-
-        } else {
-            last = stack.pop();
-            first = stack.pop();
-        }
+    if (maxSqDist > sqTolerance) {
+        if (index - first > 3) simplify(coords, first, index, sqTolerance);
+        coords[index + 2] = maxSqDist;
+        if (last - index > 3) simplify(coords, index, last, sqTolerance);
     }
 }
 
 // square distance from a point to a segment
-function getSqSegDist(p, a, b) {
+function getSqSegDist(px, py, x, y, bx, by) {
 
-    var x = a[0], y = a[1],
-        bx = b[0], by = b[1],
-        px = p[0], py = p[1],
-        dx = bx - x,
-        dy = by - y;
+    var dx = bx - x;
+    var dy = by - y;
 
     if (dx !== 0 || dy !== 0) {
 
@@ -19182,216 +19238,189 @@ function getSqSegDist(p, a, b) {
     return dx * dx + dy * dy;
 }
 
-var feature$1 = createFeature;
-
-function createFeature(tags, type, geom, id) {
+function createFeature(id, type, geom, tags) {
     var feature = {
-        id: id || null,
+        id: typeof id === 'undefined' ? null : id,
         type: type,
         geometry: geom,
-        tags: tags || null,
-        min: [Infinity, Infinity], // initial bbox values
-        max: [-Infinity, -Infinity]
+        tags: tags,
+        minX: Infinity,
+        minY: Infinity,
+        maxX: -Infinity,
+        maxY: -Infinity
     };
     calcBBox(feature);
     return feature;
 }
 
-// calculate the feature bounding box for faster clipping later
 function calcBBox(feature) {
-    var geometry = feature.geometry,
-        min = feature.min,
-        max = feature.max;
+    var geom = feature.geometry;
+    var type = feature.type;
 
-    if (feature.type === 1) {
-        calcRingBBox(min, max, geometry);
-    } else {
-        for (var i = 0; i < geometry.length; i++) {
-            calcRingBBox(min, max, geometry[i]);
+    if (type === 'Point' || type === 'MultiPoint' || type === 'LineString') {
+        calcLineBBox(feature, geom);
+
+    } else if (type === 'Polygon' || type === 'MultiLineString') {
+        for (var i = 0; i < geom.length; i++) {
+            calcLineBBox(feature, geom[i]);
+        }
+
+    } else if (type === 'MultiPolygon') {
+        for (i = 0; i < geom.length; i++) {
+            for (var j = 0; j < geom[i].length; j++) {
+                calcLineBBox(feature, geom[i][j]);
+            }
         }
     }
-
-    return feature;
 }
 
-function calcRingBBox(min, max, points) {
-    for (var i = 0, p; i < points.length; i++) {
-        p = points[i];
-        min[0] = Math.min(p[0], min[0]);
-        max[0] = Math.max(p[0], max[0]);
-        min[1] = Math.min(p[1], min[1]);
-        max[1] = Math.max(p[1], max[1]);
+function calcLineBBox(feature, geom) {
+    for (var i = 0; i < geom.length; i += 3) {
+        feature.minX = Math.min(feature.minX, geom[i]);
+        feature.minY = Math.min(feature.minY, geom[i + 1]);
+        feature.maxX = Math.max(feature.maxX, geom[i]);
+        feature.maxY = Math.max(feature.maxY, geom[i + 1]);
     }
 }
-
-var convert_1 = convert;
-
-
-
 
 // converts GeoJSON feature into an intermediate projected JSON vector format with simplification data
 
-function convert(data, tolerance) {
+function convert(data, options) {
     var features = [];
-
     if (data.type === 'FeatureCollection') {
         for (var i = 0; i < data.features.length; i++) {
-            convertFeature(features, data.features[i], tolerance);
+            convertFeature(features, data.features[i], options, i);
         }
+
     } else if (data.type === 'Feature') {
-        convertFeature(features, data, tolerance);
+        convertFeature(features, data, options);
 
     } else {
         // single geometry or a geometry collection
-        convertFeature(features, {geometry: data}, tolerance);
+        convertFeature(features, {geometry: data}, options);
     }
+
     return features;
 }
 
-function convertFeature(features, feature, tolerance) {
-    if (feature.geometry === null) {
-        // ignore features with null geometry
-        return;
+function convertFeature(features, geojson, options, index) {
+    if (!geojson.geometry) return;
+
+    var coords = geojson.geometry.coordinates;
+    var type = geojson.geometry.type;
+    var tolerance = Math.pow(options.tolerance / ((1 << options.maxZoom) * options.extent), 2);
+    var geometry = [];
+    var id = geojson.id;
+    if (options.promoteId) {
+        id = geojson.properties[options.promoteId];
+    } else if (options.generateId) {
+        id = index || 0;
     }
-
-    var geom = feature.geometry,
-        type = geom.type,
-        coords = geom.coordinates,
-        tags = feature.properties,
-        id = feature.id,
-        i, j, rings, projectedRing;
-
     if (type === 'Point') {
-        features.push(feature$1(tags, 1, [projectPoint(coords)], id));
+        convertPoint(coords, geometry);
 
     } else if (type === 'MultiPoint') {
-        features.push(feature$1(tags, 1, project(coords), id));
+        for (var i = 0; i < coords.length; i++) {
+            convertPoint(coords[i], geometry);
+        }
 
     } else if (type === 'LineString') {
-        features.push(feature$1(tags, 2, [project(coords, tolerance)], id));
+        convertLine(coords, geometry, tolerance, false);
 
-    } else if (type === 'MultiLineString' || type === 'Polygon') {
-        rings = [];
-        for (i = 0; i < coords.length; i++) {
-            projectedRing = project(coords[i], tolerance);
-            if (type === 'Polygon') projectedRing.outer = (i === 0);
-            rings.push(projectedRing);
+    } else if (type === 'MultiLineString') {
+        if (options.lineMetrics) {
+            // explode into linestrings to be able to track metrics
+            for (i = 0; i < coords.length; i++) {
+                geometry = [];
+                convertLine(coords[i], geometry, tolerance, false);
+                features.push(createFeature(id, 'LineString', geometry, geojson.properties));
+            }
+            return;
+        } else {
+            convertLines(coords, geometry, tolerance, false);
         }
-        features.push(feature$1(tags, type === 'Polygon' ? 3 : 2, rings, id));
+
+    } else if (type === 'Polygon') {
+        convertLines(coords, geometry, tolerance, true);
 
     } else if (type === 'MultiPolygon') {
-        rings = [];
         for (i = 0; i < coords.length; i++) {
-            for (j = 0; j < coords[i].length; j++) {
-                projectedRing = project(coords[i][j], tolerance);
-                projectedRing.outer = (j === 0);
-                rings.push(projectedRing);
-            }
+            var polygon = [];
+            convertLines(coords[i], polygon, tolerance, true);
+            geometry.push(polygon);
         }
-        features.push(feature$1(tags, 3, rings, id));
-
     } else if (type === 'GeometryCollection') {
-        for (i = 0; i < geom.geometries.length; i++) {
+        for (i = 0; i < geojson.geometry.geometries.length; i++) {
             convertFeature(features, {
-                geometry: geom.geometries[i],
-                properties: tags
-            }, tolerance);
+                id: id,
+                geometry: geojson.geometry.geometries[i],
+                properties: geojson.properties
+            }, options, index);
         }
-
+        return;
     } else {
         throw new Error('Input data is not a valid GeoJSON object.');
     }
+
+    features.push(createFeature(id, type, geometry, geojson.properties));
 }
 
-function project(lonlats, tolerance) {
-    var projected = [];
-    for (var i = 0; i < lonlats.length; i++) {
-        projected.push(projectPoint(lonlats[i]));
-    }
-    if (tolerance) {
-        simplify_1(projected, tolerance);
-        calcSize(projected);
-    }
-    return projected;
+function convertPoint(coords, out) {
+    out.push(projectX(coords[0]));
+    out.push(projectY(coords[1]));
+    out.push(0);
 }
 
-function projectPoint(p) {
-    var sin = Math.sin(p[1] * Math.PI / 180),
-        x = (p[0] / 360 + 0.5),
-        y = (0.5 - 0.25 * Math.log((1 + sin) / (1 - sin)) / Math.PI);
+function convertLine(ring, out, tolerance, isPolygon) {
+    var x0, y0;
+    var size = 0;
 
-    y = y < 0 ? 0 :
-        y > 1 ? 1 : y;
+    for (var j = 0; j < ring.length; j++) {
+        var x = projectX(ring[j][0]);
+        var y = projectY(ring[j][1]);
 
-    return [x, y, 0];
-}
+        out.push(x);
+        out.push(y);
+        out.push(0);
 
-// calculate area and length of the poly
-function calcSize(points) {
-    var area = 0,
-        dist = 0;
-
-    for (var i = 0, a, b; i < points.length - 1; i++) {
-        a = b || points[i];
-        b = points[i + 1];
-
-        area += a[0] * b[1] - b[0] * a[1];
-
-        // use Manhattan distance instead of Euclidian one to avoid expensive square root computation
-        dist += Math.abs(b[0] - a[0]) + Math.abs(b[1] - a[1]);
-    }
-    points.area = Math.abs(area / 2);
-    points.dist = dist;
-}
-
-var tile = transformTile;
-var point = transformPoint;
-
-// Transforms the coordinates of each feature in the given tile from
-// mercator-projected space into (extent x extent) tile space.
-function transformTile(tile, extent) {
-    if (tile.transformed) return tile;
-
-    var z2 = tile.z2,
-        tx = tile.x,
-        ty = tile.y,
-        i, j, k;
-
-    for (i = 0; i < tile.features.length; i++) {
-        var feature = tile.features[i],
-            geom = feature.geometry,
-            type = feature.type;
-
-        if (type === 1) {
-            for (j = 0; j < geom.length; j++) geom[j] = transformPoint(geom[j], extent, z2, tx, ty);
-
-        } else {
-            for (j = 0; j < geom.length; j++) {
-                var ring = geom[j];
-                for (k = 0; k < ring.length; k++) ring[k] = transformPoint(ring[k], extent, z2, tx, ty);
+        if (j > 0) {
+            if (isPolygon) {
+                size += (x0 * y - x * y0) / 2; // area
+            } else {
+                size += Math.sqrt(Math.pow(x - x0, 2) + Math.pow(y - y0, 2)); // length
             }
         }
+        x0 = x;
+        y0 = y;
     }
 
-    tile.transformed = true;
+    var last = out.length - 3;
+    out[2] = 1;
+    simplify(out, 0, last, tolerance);
+    out[last + 2] = 1;
 
-    return tile;
+    out.size = Math.abs(size);
+    out.start = 0;
+    out.end = out.size;
 }
 
-function transformPoint(p, extent, z2, tx, ty) {
-    var x = Math.round(extent * (p[0] * z2 - tx)),
-        y = Math.round(extent * (p[1] * z2 - ty));
-    return [x, y];
+function convertLines(rings, out, tolerance, isPolygon) {
+    for (var i = 0; i < rings.length; i++) {
+        var geom = [];
+        convertLine(rings[i], geom, tolerance, isPolygon);
+        out.push(geom);
+    }
 }
 
-var transform = {
-	tile: tile,
-	point: point
-};
+function projectX(x) {
+    return x / 360 + 0.5;
+}
 
-var clip_1 = clip;
-
-
+function projectY(y) {
+    var sin = Math.sin(y * Math.PI / 180);
+    var y2 = 0.5 - 0.25 * Math.log((1 + sin) / (1 - sin)) / Math.PI;
+    return y2 < 0 ? 0 : y2 > 1 ? 1 : y2;
+}
 
 /* clip features between two axis-parallel lines:
  *     |        |
@@ -19400,152 +19429,213 @@ var clip_1 = clip;
  *     |        |
  */
 
-function clip(features, scale, k1, k2, axis, intersect, minAll, maxAll) {
+function clip(features, scale, k1, k2, axis, minAll, maxAll, options) {
 
     k1 /= scale;
     k2 /= scale;
 
-    if (minAll >= k1 && maxAll <= k2) return features; // trivial accept
-    else if (minAll > k2 || maxAll < k1) return null; // trivial reject
+    if (minAll >= k1 && maxAll < k2) return features; // trivial accept
+    else if (maxAll < k1 || minAll >= k2) return null; // trivial reject
 
     var clipped = [];
 
     for (var i = 0; i < features.length; i++) {
 
-        var feature = features[i],
-            geometry = feature.geometry,
-            type = feature.type,
-            min, max;
+        var feature = features[i];
+        var geometry = feature.geometry;
+        var type = feature.type;
 
-        min = feature.min[axis];
-        max = feature.max[axis];
+        var min = axis === 0 ? feature.minX : feature.minY;
+        var max = axis === 0 ? feature.maxX : feature.maxY;
 
-        if (min >= k1 && max <= k2) { // trivial accept
+        if (min >= k1 && max < k2) { // trivial accept
             clipped.push(feature);
             continue;
-        } else if (min > k2 || max < k1) continue; // trivial reject
+        } else if (max < k1 || min >= k2) { // trivial reject
+            continue;
+        }
 
-        var slices = type === 1 ?
-                clipPoints(geometry, k1, k2, axis) :
-                clipGeometry(geometry, k1, k2, axis, intersect, type === 3);
+        var newGeometry = [];
 
-        if (slices.length) {
-            // if a feature got clipped, it will likely get clipped on the next zoom level as well,
-            // so there's no need to recalculate bboxes
-            clipped.push(feature$1(feature.tags, type, slices, feature.id));
+        if (type === 'Point' || type === 'MultiPoint') {
+            clipPoints(geometry, newGeometry, k1, k2, axis);
+
+        } else if (type === 'LineString') {
+            clipLine(geometry, newGeometry, k1, k2, axis, false, options.lineMetrics);
+
+        } else if (type === 'MultiLineString') {
+            clipLines(geometry, newGeometry, k1, k2, axis, false);
+
+        } else if (type === 'Polygon') {
+            clipLines(geometry, newGeometry, k1, k2, axis, true);
+
+        } else if (type === 'MultiPolygon') {
+            for (var j = 0; j < geometry.length; j++) {
+                var polygon = [];
+                clipLines(geometry[j], polygon, k1, k2, axis, true);
+                if (polygon.length) {
+                    newGeometry.push(polygon);
+                }
+            }
+        }
+
+        if (newGeometry.length) {
+            if (options.lineMetrics && type === 'LineString') {
+                for (j = 0; j < newGeometry.length; j++) {
+                    clipped.push(createFeature(feature.id, type, newGeometry[j], feature.tags));
+                }
+                continue;
+            }
+
+            if (type === 'LineString' || type === 'MultiLineString') {
+                if (newGeometry.length === 1) {
+                    type = 'LineString';
+                    newGeometry = newGeometry[0];
+                } else {
+                    type = 'MultiLineString';
+                }
+            }
+            if (type === 'Point' || type === 'MultiPoint') {
+                type = newGeometry.length === 3 ? 'Point' : 'MultiPoint';
+            }
+
+            clipped.push(createFeature(feature.id, type, newGeometry, feature.tags));
         }
     }
 
     return clipped.length ? clipped : null;
 }
 
-function clipPoints(geometry, k1, k2, axis) {
-    var slice = [];
+function clipPoints(geom, newGeom, k1, k2, axis) {
+    for (var i = 0; i < geom.length; i += 3) {
+        var a = geom[i + axis];
 
-    for (var i = 0; i < geometry.length; i++) {
-        var a = geometry[i],
-            ak = a[axis];
-
-        if (ak >= k1 && ak <= k2) slice.push(a);
+        if (a >= k1 && a <= k2) {
+            newGeom.push(geom[i]);
+            newGeom.push(geom[i + 1]);
+            newGeom.push(geom[i + 2]);
+        }
     }
+}
+
+function clipLine(geom, newGeom, k1, k2, axis, isPolygon, trackMetrics) {
+
+    var slice = newSlice(geom);
+    var intersect = axis === 0 ? intersectX : intersectY;
+    var len = geom.start;
+    var segLen, t;
+
+    for (var i = 0; i < geom.length - 3; i += 3) {
+        var ax = geom[i];
+        var ay = geom[i + 1];
+        var az = geom[i + 2];
+        var bx = geom[i + 3];
+        var by = geom[i + 4];
+        var a = axis === 0 ? ax : ay;
+        var b = axis === 0 ? bx : by;
+        var exited = false;
+
+        if (trackMetrics) segLen = Math.sqrt(Math.pow(ax - bx, 2) + Math.pow(ay - by, 2));
+
+        if (a < k1) {
+            // ---|-->  | (line enters the clip region from the left)
+            if (b > k1) {
+                t = intersect(slice, ax, ay, bx, by, k1);
+                if (trackMetrics) slice.start = len + segLen * t;
+            }
+        } else if (a > k2) {
+            // |  <--|--- (line enters the clip region from the right)
+            if (b < k2) {
+                t = intersect(slice, ax, ay, bx, by, k2);
+                if (trackMetrics) slice.start = len + segLen * t;
+            }
+        } else {
+            addPoint(slice, ax, ay, az);
+        }
+        if (b < k1 && a >= k1) {
+            // <--|---  | or <--|-----|--- (line exits the clip region on the left)
+            t = intersect(slice, ax, ay, bx, by, k1);
+            exited = true;
+        }
+        if (b > k2 && a <= k2) {
+            // |  ---|--> or ---|-----|--> (line exits the clip region on the right)
+            t = intersect(slice, ax, ay, bx, by, k2);
+            exited = true;
+        }
+
+        if (!isPolygon && exited) {
+            if (trackMetrics) slice.end = len + segLen * t;
+            newGeom.push(slice);
+            slice = newSlice(geom);
+        }
+
+        if (trackMetrics) len += segLen;
+    }
+
+    // add the last point
+    var last = geom.length - 3;
+    ax = geom[last];
+    ay = geom[last + 1];
+    az = geom[last + 2];
+    a = axis === 0 ? ax : ay;
+    if (a >= k1 && a <= k2) addPoint(slice, ax, ay, az);
+
+    // close the polygon if its endpoints are not the same after clipping
+    last = slice.length - 3;
+    if (isPolygon && last >= 3 && (slice[last] !== slice[0] || slice[last + 1] !== slice[1])) {
+        addPoint(slice, slice[0], slice[1], slice[2]);
+    }
+
+    // add the final slice
+    if (slice.length) {
+        newGeom.push(slice);
+    }
+}
+
+function newSlice(line) {
+    var slice = [];
+    slice.size = line.size;
+    slice.start = line.start;
+    slice.end = line.end;
     return slice;
 }
 
-function clipGeometry(geometry, k1, k2, axis, intersect, closed) {
-
-    var slices = [];
-
-    for (var i = 0; i < geometry.length; i++) {
-
-        var ak = 0,
-            bk = 0,
-            b = null,
-            points = geometry[i],
-            area = points.area,
-            dist = points.dist,
-            outer = points.outer,
-            len = points.length,
-            a, j, last;
-
-        var slice = [];
-
-        for (j = 0; j < len - 1; j++) {
-            a = b || points[j];
-            b = points[j + 1];
-            ak = bk || a[axis];
-            bk = b[axis];
-
-            if (ak < k1) {
-
-                if ((bk > k2)) { // ---|-----|-->
-                    slice.push(intersect(a, b, k1), intersect(a, b, k2));
-                    if (!closed) slice = newSlice(slices, slice, area, dist, outer);
-
-                } else if (bk >= k1) slice.push(intersect(a, b, k1)); // ---|-->  |
-
-            } else if (ak > k2) {
-
-                if ((bk < k1)) { // <--|-----|---
-                    slice.push(intersect(a, b, k2), intersect(a, b, k1));
-                    if (!closed) slice = newSlice(slices, slice, area, dist, outer);
-
-                } else if (bk <= k2) slice.push(intersect(a, b, k2)); // |  <--|---
-
-            } else {
-
-                slice.push(a);
-
-                if (bk < k1) { // <--|---  |
-                    slice.push(intersect(a, b, k1));
-                    if (!closed) slice = newSlice(slices, slice, area, dist, outer);
-
-                } else if (bk > k2) { // |  ---|-->
-                    slice.push(intersect(a, b, k2));
-                    if (!closed) slice = newSlice(slices, slice, area, dist, outer);
-                }
-                // | --> |
-            }
-        }
-
-        // add the last point
-        a = points[len - 1];
-        ak = a[axis];
-        if (ak >= k1 && ak <= k2) slice.push(a);
-
-        // close the polygon if its endpoints are not the same after clipping
-
-        last = slice[slice.length - 1];
-        if (closed && last && (slice[0][0] !== last[0] || slice[0][1] !== last[1])) slice.push(slice[0]);
-
-        // add the final slice
-        newSlice(slices, slice, area, dist, outer);
+function clipLines(geom, newGeom, k1, k2, axis, isPolygon) {
+    for (var i = 0; i < geom.length; i++) {
+        clipLine(geom[i], newGeom, k1, k2, axis, isPolygon, false);
     }
-
-    return slices;
 }
 
-function newSlice(slices, slice, area, dist, outer) {
-    if (slice.length) {
-        // we don't recalculate the area/length of the unclipped geometry because the case where it goes
-        // below the visibility threshold as a result of clipping is rare, so we avoid doing unnecessary work
-        slice.area = area;
-        slice.dist = dist;
-        if (outer !== undefined) slice.outer = outer;
-
-        slices.push(slice);
-    }
-    return [];
+function addPoint(out, x, y, z) {
+    out.push(x);
+    out.push(y);
+    out.push(z);
 }
 
-var wrap_1 = wrap$1;
+function intersectX(out, ax, ay, bx, by, x) {
+    var t = (x - ax) / (bx - ax);
+    out.push(x);
+    out.push(ay + (by - ay) * t);
+    out.push(1);
+    return t;
+}
 
-function wrap$1(features, buffer, intersectX) {
-    var merged = features,
-        left  = clip_1(features, 1, -1 - buffer, buffer,     0, intersectX, -1, 2), // left world copy
-        right = clip_1(features, 1,  1 - buffer, 2 + buffer, 0, intersectX, -1, 2); // right world copy
+function intersectY(out, ax, ay, bx, by, y) {
+    var t = (y - ay) / (by - ay);
+    out.push(ax + (bx - ax) * t);
+    out.push(y);
+    out.push(1);
+    return t;
+}
+
+function wrap$1(features, options) {
+    var buffer = options.buffer / options.extent;
+    var merged = features;
+    var left  = clip(features, 1, -1 - buffer, buffer,     0, -1, 2, options); // left world copy
+    var right = clip(features, 1,  1 - buffer, 2 + buffer, 0, -1, 2, options); // right world copy
 
     if (left || right) {
-        merged = clip_1(features, 1, -buffer, 1 + buffer, 0, intersectX, -1, 2) || []; // center world copy
+        merged = clip(features, 1, -buffer, 1 + buffer, 0, -1, 2, options) || []; // center world copy
 
         if (left) merged = shiftFeatureCoords(left, 1).concat(merged); // merge left into center
         if (right) merged = merged.concat(shiftFeatureCoords(right, -1)); // merge right into center
@@ -19563,16 +19653,26 @@ function shiftFeatureCoords(features, offset) {
 
         var newGeometry;
 
-        if (type === 1) {
+        if (type === 'Point' || type === 'MultiPoint' || type === 'LineString') {
             newGeometry = shiftCoords(feature.geometry, offset);
-        } else {
+
+        } else if (type === 'MultiLineString' || type === 'Polygon') {
             newGeometry = [];
             for (var j = 0; j < feature.geometry.length; j++) {
                 newGeometry.push(shiftCoords(feature.geometry[j], offset));
             }
+        } else if (type === 'MultiPolygon') {
+            newGeometry = [];
+            for (j = 0; j < feature.geometry.length; j++) {
+                var newPolygon = [];
+                for (var k = 0; k < feature.geometry[j].length; k++) {
+                    newPolygon.push(shiftCoords(feature.geometry[j][k], offset));
+                }
+                newGeometry.push(newPolygon);
+            }
         }
 
-        newFeatures.push(feature$1(feature.tags, type, newGeometry, feature.id));
+        newFeatures.push(createFeature(feature.id, type, newGeometry, feature.tags));
     }
 
     return newFeatures;
@@ -19580,18 +19680,64 @@ function shiftFeatureCoords(features, offset) {
 
 function shiftCoords(points, offset) {
     var newPoints = [];
-    newPoints.area = points.area;
-    newPoints.dist = points.dist;
+    newPoints.size = points.size;
 
-    for (var i = 0; i < points.length; i++) {
-        newPoints.push([points[i][0] + offset, points[i][1], points[i][2]]);
+    if (points.start !== undefined) {
+        newPoints.start = points.start;
+        newPoints.end = points.end;
+    }
+
+    for (var i = 0; i < points.length; i += 3) {
+        newPoints.push(points[i] + offset, points[i + 1], points[i + 2]);
     }
     return newPoints;
 }
 
-var tile$1 = createTile;
+// Transforms the coordinates of each feature in the given tile from
+// mercator-projected space into (extent x extent) tile space.
+function transformTile(tile, extent) {
+    if (tile.transformed) return tile;
 
-function createTile(features, z2, tx, ty, tolerance, noSimplify) {
+    var z2 = 1 << tile.z,
+        tx = tile.x,
+        ty = tile.y,
+        i, j, k;
+
+    for (i = 0; i < tile.features.length; i++) {
+        var feature = tile.features[i],
+            geom = feature.geometry,
+            type = feature.type;
+
+        feature.geometry = [];
+
+        if (type === 1) {
+            for (j = 0; j < geom.length; j += 2) {
+                feature.geometry.push(transformPoint(geom[j], geom[j + 1], extent, z2, tx, ty));
+            }
+        } else {
+            for (j = 0; j < geom.length; j++) {
+                var ring = [];
+                for (k = 0; k < geom[j].length; k += 2) {
+                    ring.push(transformPoint(geom[j][k], geom[j][k + 1], extent, z2, tx, ty));
+                }
+                feature.geometry.push(ring);
+            }
+        }
+    }
+
+    tile.transformed = true;
+
+    return tile;
+}
+
+function transformPoint(x, y, extent, z2, tx, ty) {
+    return [
+        Math.round(extent * (x * z2 - tx)),
+        Math.round(extent * (y * z2 - ty))];
+}
+
+function createTile(features, z, tx, ty, options) {
+    var tolerance = z === options.maxZoom ? 0 : options.tolerance / ((1 << z) * options.extent);
     var tile = {
         features: [],
         numPoints: 0,
@@ -19600,77 +19746,75 @@ function createTile(features, z2, tx, ty, tolerance, noSimplify) {
         source: null,
         x: tx,
         y: ty,
-        z2: z2,
+        z: z,
         transformed: false,
-        min: [2, 1],
-        max: [-1, 0]
+        minX: 2,
+        minY: 1,
+        maxX: -1,
+        maxY: 0
     };
     for (var i = 0; i < features.length; i++) {
         tile.numFeatures++;
-        addFeature(tile, features[i], tolerance, noSimplify);
+        addFeature(tile, features[i], tolerance, options);
 
-        var min = features[i].min,
-            max = features[i].max;
+        var minX = features[i].minX;
+        var minY = features[i].minY;
+        var maxX = features[i].maxX;
+        var maxY = features[i].maxY;
 
-        if (min[0] < tile.min[0]) tile.min[0] = min[0];
-        if (min[1] < tile.min[1]) tile.min[1] = min[1];
-        if (max[0] > tile.max[0]) tile.max[0] = max[0];
-        if (max[1] > tile.max[1]) tile.max[1] = max[1];
+        if (minX < tile.minX) tile.minX = minX;
+        if (minY < tile.minY) tile.minY = minY;
+        if (maxX > tile.maxX) tile.maxX = maxX;
+        if (maxY > tile.maxY) tile.maxY = maxY;
     }
     return tile;
 }
 
-function addFeature(tile, feature, tolerance, noSimplify) {
+function addFeature(tile, feature, tolerance, options) {
 
     var geom = feature.geometry,
         type = feature.type,
-        simplified = [],
-        sqTolerance = tolerance * tolerance,
-        i, j, ring, p;
+        simplified = [];
 
-    if (type === 1) {
-        for (i = 0; i < geom.length; i++) {
+    if (type === 'Point' || type === 'MultiPoint') {
+        for (var i = 0; i < geom.length; i += 3) {
             simplified.push(geom[i]);
+            simplified.push(geom[i + 1]);
             tile.numPoints++;
             tile.numSimplified++;
         }
 
-    } else {
+    } else if (type === 'LineString') {
+        addLine(simplified, geom, tile, tolerance, false, false);
 
-        // simplify and transform projected coordinates for tile geometry
+    } else if (type === 'MultiLineString' || type === 'Polygon') {
         for (i = 0; i < geom.length; i++) {
-            ring = geom[i];
+            addLine(simplified, geom[i], tile, tolerance, type === 'Polygon', i === 0);
+        }
 
-            // filter out tiny polylines & polygons
-            if (!noSimplify && ((type === 2 && ring.dist < tolerance) ||
-                                (type === 3 && ring.area < sqTolerance))) {
-                tile.numPoints += ring.length;
-                continue;
+    } else if (type === 'MultiPolygon') {
+
+        for (var k = 0; k < geom.length; k++) {
+            var polygon = geom[k];
+            for (i = 0; i < polygon.length; i++) {
+                addLine(simplified, polygon[i], tile, tolerance, true, i === 0);
             }
-
-            var simplifiedRing = [];
-
-            for (j = 0; j < ring.length; j++) {
-                p = ring[j];
-                // keep points with importance > tolerance
-                if (noSimplify || p[2] > sqTolerance) {
-                    simplifiedRing.push(p);
-                    tile.numSimplified++;
-                }
-                tile.numPoints++;
-            }
-
-            if (type === 3) rewind(simplifiedRing, ring.outer);
-
-            simplified.push(simplifiedRing);
         }
     }
 
     if (simplified.length) {
+        var tags = feature.tags || null;
+        if (type === 'LineString' && options.lineMetrics) {
+            tags = {};
+            for (var key in feature.tags) tags[key] = feature.tags[key];
+            tags['mapbox_clip_start'] = geom.start / geom.size;
+            tags['mapbox_clip_end'] = geom.end / geom.size;
+        }
         var tileFeature = {
             geometry: simplified,
-            type: type,
-            tags: feature.tags || null
+            type: type === 'Polygon' || type === 'MultiPolygon' ? 3 :
+                type === 'LineString' || type === 'MultiLineString' ? 2 : 1,
+            tags: tags
         };
         if (feature.id !== null) {
             tileFeature.id = feature.id;
@@ -19679,25 +19823,46 @@ function addFeature(tile, feature, tolerance, noSimplify) {
     }
 }
 
-function rewind(ring, clockwise) {
-    var area = signedArea$2(ring);
-    if (area < 0 === clockwise) ring.reverse();
-}
+function addLine(result, geom, tile, tolerance, isPolygon, isOuter) {
+    var sqTolerance = tolerance * tolerance;
 
-function signedArea$2(ring) {
-    var sum = 0;
-    for (var i = 0, len = ring.length, j = len - 1, p1, p2; i < len; j = i++) {
-        p1 = ring[i];
-        p2 = ring[j];
-        sum += (p2[0] - p1[0]) * (p1[1] + p2[1]);
+    if (tolerance > 0 && (geom.size < (isPolygon ? sqTolerance : tolerance))) {
+        tile.numPoints += geom.length / 3;
+        return;
     }
-    return sum;
+
+    var ring = [];
+
+    for (var i = 0; i < geom.length; i += 3) {
+        if (tolerance === 0 || geom[i + 2] > sqTolerance) {
+            tile.numSimplified++;
+            ring.push(geom[i]);
+            ring.push(geom[i + 1]);
+        }
+        tile.numPoints++;
+    }
+
+    if (isPolygon) rewind(ring, isOuter);
+
+    result.push(ring);
 }
 
-var src = geojsonvt;
-
-     // final simplified tile generation
-
+function rewind(ring, clockwise) {
+    var area = 0;
+    for (var i = 0, len = ring.length, j = len - 2; i < len; j = i, i += 2) {
+        area += (ring[i] - ring[j]) * (ring[i + 1] + ring[j + 1]);
+    }
+    if (area > 0 === clockwise) {
+        for (i = 0, len = ring.length; i < len / 2; i += 2) {
+            var x = ring[i];
+            var y = ring[i + 1];
+            ring[i] = ring[len - 2 - i];
+            ring[i + 1] = ring[len - 1 - i];
+            ring[len - 2 - i] = x;
+            ring[len - 1 - i] = y;
+        }
+    }
+}
 
 function geojsonvt(data, options) {
     return new GeoJSONVT(data, options);
@@ -19710,8 +19875,10 @@ function GeoJSONVT(data, options) {
 
     if (debug) console.time('preprocess data');
 
-    var z2 = 1 << options.maxZoom, // 2^z
-        features = convert_1(data, options.tolerance / (z2 * options.extent));
+    if (options.maxZoom < 0 || options.maxZoom > 24) throw new Error('maxZoom should be in the 0-24 range');
+    if (options.promoteId && options.generateId) throw new Error('promoteId and generateId cannot be used together.');
+
+    var features = convert(data, options);
 
     this.tiles = {};
     this.tileCoords = [];
@@ -19724,7 +19891,7 @@ function GeoJSONVT(data, options) {
         this.total = 0;
     }
 
-    features = wrap_1(features, options.buffer / options.extent, intersectX);
+    features = wrap$1(features, options);
 
     // start slicing from the top tile down
     if (features.length) this.splitTile(features, 0, 0, 0);
@@ -19740,10 +19907,12 @@ GeoJSONVT.prototype.options = {
     maxZoom: 14,            // max zoom to preserve detail on
     indexMaxZoom: 5,        // max zoom in the tile index
     indexMaxPoints: 100000, // max number of points per tile in the tile index
-    solidChildren: false,   // whether to tile solid square tiles further
     tolerance: 3,           // simplification tolerance (higher means simpler)
     extent: 4096,           // tile extent
     buffer: 64,             // tile buffer on each side
+    lineMetrics: false,     // whether to calculate line metrics
+    promoteId: null,        // name of a feature property to be promoted to feature.id
+    generateId: false,      // whether to generate feature ids. Cannot be used with promoteId
     debug: 0                // logging level (0, 1 or 2)
 };
 
@@ -19751,8 +19920,7 @@ GeoJSONVT.prototype.splitTile = function (features, z, x, y, cz, cx, cy) {
 
     var stack = [features, z, x, y],
         options = this.options,
-        debug = options.debug,
-        solid = null;
+        debug = options.debug;
 
     // avoid recursion by using a processing queue
     while (stack.length) {
@@ -19763,13 +19931,12 @@ GeoJSONVT.prototype.splitTile = function (features, z, x, y, cz, cx, cy) {
 
         var z2 = 1 << z,
             id = toID(z, x, y),
-            tile = this.tiles[id],
-            tileTolerance = z === options.maxZoom ? 0 : options.tolerance / (z2 * options.extent);
+            tile = this.tiles[id];
 
         if (!tile) {
             if (debug > 1) console.time('creation');
 
-            tile = this.tiles[id] = tile$1(features, z2, x, y, tileTolerance, z === options.maxZoom);
+            tile = this.tiles[id] = createTile(features, z, x, y, options);
             this.tileCoords.push({z: z, x: x, y: y});
 
             if (debug) {
@@ -19802,14 +19969,10 @@ GeoJSONVT.prototype.splitTile = function (features, z, x, y, cz, cx, cy) {
             if (x !== Math.floor(cx / m) || y !== Math.floor(cy / m)) continue;
         }
 
-        // stop tiling if the tile is solid clipped square
-        if (!options.solidChildren && isClippedSquare(tile, options.extent, options.buffer)) {
-            if (cz) solid = z; // and remember the zoom if we're drilling down
-            continue;
-        }
-
         // if we slice further down, no need to keep source geometry
         tile.source = null;
+
+        if (features.length === 0) continue;
 
         if (debug > 1) console.time('clipping');
 
@@ -19822,30 +19985,29 @@ GeoJSONVT.prototype.splitTile = function (features, z, x, y, cz, cx, cy) {
 
         tl = bl = tr = br = null;
 
-        left  = clip_1(features, z2, x - k1, x + k3, 0, intersectX, tile.min[0], tile.max[0]);
-        right = clip_1(features, z2, x + k2, x + k4, 0, intersectX, tile.min[0], tile.max[0]);
+        left  = clip(features, z2, x - k1, x + k3, 0, tile.minX, tile.maxX, options);
+        right = clip(features, z2, x + k2, x + k4, 0, tile.minX, tile.maxX, options);
+        features = null;
 
         if (left) {
-            tl = clip_1(left, z2, y - k1, y + k3, 1, intersectY, tile.min[1], tile.max[1]);
-            bl = clip_1(left, z2, y + k2, y + k4, 1, intersectY, tile.min[1], tile.max[1]);
+            tl = clip(left, z2, y - k1, y + k3, 1, tile.minY, tile.maxY, options);
+            bl = clip(left, z2, y + k2, y + k4, 1, tile.minY, tile.maxY, options);
+            left = null;
         }
 
         if (right) {
-            tr = clip_1(right, z2, y - k1, y + k3, 1, intersectY, tile.min[1], tile.max[1]);
-            br = clip_1(right, z2, y + k2, y + k4, 1, intersectY, tile.min[1], tile.max[1]);
+            tr = clip(right, z2, y - k1, y + k3, 1, tile.minY, tile.maxY, options);
+            br = clip(right, z2, y + k2, y + k4, 1, tile.minY, tile.maxY, options);
+            right = null;
         }
 
         if (debug > 1) console.timeEnd('clipping');
 
-        if (features.length) {
-            stack.push(tl || [], z + 1, x * 2,     y * 2);
-            stack.push(bl || [], z + 1, x * 2,     y * 2 + 1);
-            stack.push(tr || [], z + 1, x * 2 + 1, y * 2);
-            stack.push(br || [], z + 1, x * 2 + 1, y * 2 + 1);
-        }
+        stack.push(tl || [], z + 1, x * 2,     y * 2);
+        stack.push(bl || [], z + 1, x * 2,     y * 2 + 1);
+        stack.push(tr || [], z + 1, x * 2 + 1, y * 2);
+        stack.push(br || [], z + 1, x * 2 + 1, y * 2 + 1);
     }
-
-    return solid;
 };
 
 GeoJSONVT.prototype.getTile = function (z, x, y) {
@@ -19853,11 +20015,13 @@ GeoJSONVT.prototype.getTile = function (z, x, y) {
         extent = options.extent,
         debug = options.debug;
 
+    if (z < 0 || z > 24) return null;
+
     var z2 = 1 << z;
     x = ((x % z2) + z2) % z2; // wrap tile x coordinate
 
     var id = toID(z, x, y);
-    if (this.tiles[id]) return transform.tile(this.tiles[id], extent);
+    if (this.tiles[id]) return transformTile(this.tiles[id], extent);
 
     if (debug > 1) console.log('drilling down to z%d-%d-%d', z, x, y);
 
@@ -19878,57 +20042,20 @@ GeoJSONVT.prototype.getTile = function (z, x, y) {
     // if we found a parent tile containing the original geometry, we can drill down from it
     if (debug > 1) console.log('found parent tile z%d-%d-%d', z0, x0, y0);
 
-    // it parent tile is a solid clipped square, return it instead since it's identical
-    if (isClippedSquare(parent, extent, options.buffer)) return transform.tile(parent, extent);
-
     if (debug > 1) console.time('drilling down');
-    var solid = this.splitTile(parent.source, z0, x0, y0, z, x, y);
+    this.splitTile(parent.source, z0, x0, y0, z, x, y);
     if (debug > 1) console.timeEnd('drilling down');
 
-    // one of the parent tiles was a solid clipped square
-    if (solid !== null) {
-        var m = 1 << (z - solid);
-        id = toID(solid, Math.floor(x / m), Math.floor(y / m));
-    }
-
-    return this.tiles[id] ? transform.tile(this.tiles[id], extent) : null;
+    return this.tiles[id] ? transformTile(this.tiles[id], extent) : null;
 };
 
 function toID(z, x, y) {
     return (((1 << z) * y + x) * 32) + z;
 }
 
-function intersectX(a, b, x) {
-    return [x, (x - a[0]) * (b[1] - a[1]) / (b[0] - a[0]) + a[1], 1];
-}
-function intersectY(a, b, y) {
-    return [(y - a[1]) * (b[0] - a[0]) / (b[1] - a[1]) + a[0], y, 1];
-}
-
 function extend(dest, src) {
     for (var i in src) dest[i] = src[i];
     return dest;
-}
-
-// checks whether a tile is a whole-area fill after clipping; if it is, there's no sense slicing it further
-function isClippedSquare(tile, extent, buffer) {
-
-    var features = tile.source;
-    if (features.length !== 1) return false;
-
-    var feature = features[0];
-    if (feature.type !== 3 || feature.geometry.length > 1) return false;
-
-    var len = feature.geometry[0].length;
-    if (len !== 5) return false;
-
-    for (var i = 0; i < len; i++) {
-        var p = transform.point(feature.geometry[0][i], extent, tile.z2, tile.x, tile.y);
-        if ((p[0] !== -buffer && p[0] !== extent + buffer) ||
-            (p[1] !== -buffer && p[1] !== extent + buffer)) return false;
-    }
-
-    return true;
 }
 
 /**
@@ -19962,7 +20089,7 @@ class GeoJSONSource extends NetworkSource {
         let layers = data.source_data.layers;
 
         for (let layer_name in layers) {
-          this.tile_indexes[layer_name] = src(layers[layer_name], {
+          this.tile_indexes[layer_name] = geojsonvt(layers[layer_name], {
             maxZoom: this.max_zoom,
             // max zoom to preserve detail on
             tolerance: 1.5,
@@ -20214,7 +20341,7 @@ function identity$1(x) {
   return x;
 }
 
-function transform$1(topology) {
+function transform(topology) {
   if ((transform = topology.transform) == null) return identity$1;
   var transform,
       x0,
@@ -20231,13 +20358,13 @@ function transform$1(topology) {
   };
 }
 
-function feature$2(topology, o) {
+function feature$1(topology, o) {
   return o.type === "GeometryCollection"
-      ? {type: "FeatureCollection", features: o.geometries.map(function(o) { return feature$3(topology, o); })}
-      : feature$3(topology, o);
+      ? {type: "FeatureCollection", features: o.geometries.map(function(o) { return feature$2(topology, o); })}
+      : feature$2(topology, o);
 }
 
-function feature$3(topology, o) {
+function feature$2(topology, o) {
   var id = o.id,
       bbox = o.bbox,
       properties = o.properties == null ? {} : o.properties,
@@ -20248,7 +20375,7 @@ function feature$3(topology, o) {
 }
 
 function object(topology, o) {
-  var transformPoint = transform$1(topology),
+  var transformPoint = transform(topology),
       arcs = topology.arcs;
 
   function arc(i, points) {
@@ -20298,14 +20425,6 @@ function object(topology, o) {
   return geometry(o);
 }
 
-// export {default as bbox} from "./src/bbox";
-// export {default as mesh, meshArcs} from "./src/mesh";
-// export {default as merge, mergeArcs} from "./src/merge";
-// export {default as neighbors} from "./src/neighbors";
-// export {default as quantize} from "./src/quantize";
-// export {default as transform} from "./src/transform";
-// export {default as untransform} from "./src/untransform";
-
 /**
  TopoJSON standalone (non-tiled) source
  Uses geojson-vt split into tiles client-side
@@ -20342,7 +20461,7 @@ class TopoJSONSource extends GeoJSONSource {
 }
 
 function getTopoJSONFeature(topology, object) {
-  let feature = feature$2(topology, object); // Convert single feature to a feature collection
+  let feature = feature$1(topology, object); // Convert single feature to a feature collection
 
   if (feature.type === 'Feature') {
     feature = {
@@ -20375,8 +20494,6 @@ class TopoJSONTileSource extends GeoJSONTileSource {
 DataSource.register('TopoJSON', source => {
   return TopoJSONTileSource.urlHasTilePattern(source.url) ? TopoJSONTileSource : TopoJSONSource;
 });
-
-// add all data source types
 
 exports.Collision = Collision;
 exports.DataSource = DataSource;
@@ -20436,11 +20553,11 @@ exports.version = version$1;
 
 });
 
-define(['./shared'], function (__chunk_1) { 'use strict';
+define(['./shared'], function (sources) { 'use strict';
 
 /*jshint worker: true*/
 const SceneWorker = Object.assign(self, {
-  FeatureSelection: __chunk_1.FeatureSelection,
+  FeatureSelection: sources.FeatureSelection,
   sources: {},
   styles: {},
   layers: {},
@@ -20451,14 +20568,14 @@ const SceneWorker = Object.assign(self, {
     this.scene_id = scene_id;
     this._worker_id = worker_id;
     this.num_workers = num_workers;
-    __chunk_1.log.setLevel(log_level);
-    __chunk_1.Utils.device_pixel_ratio = device_pixel_ratio;
-    __chunk_1.VertexElements.setElementIndexUint(has_element_index_unit);
-    __chunk_1.FeatureSelection.setPrefix(this._worker_id);
-    this.style_manager = new __chunk_1.StyleManager();
+    sources.log.setLevel(log_level);
+    sources.Utils.device_pixel_ratio = device_pixel_ratio;
+    sources.VertexElements.setElementIndexUint(has_element_index_unit);
+    sources.FeatureSelection.setPrefix(this._worker_id);
+    this.style_manager = new sources.StyleManager();
     this.importExternalScripts(external_scripts);
-    __chunk_1.Label.id_prefix = worker_id;
-    __chunk_1.Label.id_multiplier = num_workers;
+    sources.Label.id_prefix = worker_id;
+    sources.Label.id_multiplier = num_workers;
     return worker_id;
   },
 
@@ -20468,7 +20585,7 @@ const SceneWorker = Object.assign(self, {
       return;
     }
 
-    __chunk_1.log('debug', 'loading custom data source scripts in worker:', scripts); // `window` is already shimmed to allow compatibility with some other libraries (e.g. FontFaceObserver)
+    sources.log('debug', 'loading custom data source scripts in worker:', scripts); // `window` is already shimmed to allow compatibility with some other libraries (e.g. FontFaceObserver)
     // So there's an extra dance here to look for any additional `window` properties added by these script imports,
     // then add them to the worker `self` scope.
 
@@ -20482,20 +20599,21 @@ const SceneWorker = Object.assign(self, {
   },
 
   // Starts a config refresh
-  updateConfig(_ref, debug) {
-    let config = _ref.config,
-        generation = _ref.generation,
-        introspection = _ref.introspection;
+  updateConfig({
+    config,
+    generation,
+    introspection
+  }, debug) {
     config = JSON.parse(config);
-    __chunk_1.mergeDebugSettings(debug);
+    sources.mergeDebugSettings(debug);
     this.generation = generation;
     this.introspection = introspection; // Expand global properties
 
-    this.global = __chunk_1.compileFunctionStrings(config.global); // Create data sources
+    this.global = sources.compileFunctionStrings(config.global); // Create data sources
 
     this.createDataSources(config); // Expand styles
 
-    config.styles = __chunk_1.compileFunctionStrings(config.styles, __chunk_1.StyleParser.wrapFunction);
+    config.styles = sources.compileFunctionStrings(config.styles, sources.StyleParser.wrapFunction);
     this.styles = this.style_manager.build(config.styles);
     this.style_manager.initStyles({
       generation: this.generation,
@@ -20504,12 +20622,12 @@ const SceneWorker = Object.assign(self, {
       introspection: this.introspection
     }); // Parse each top-level layer as a separate tree
 
-    this.layers = __chunk_1.parseLayers(config.layers, this.style_manager.styles); // Sync tetxure info from main thread
+    this.layers = sources.parseLayers(config.layers, this.style_manager.styles); // Sync tetxure info from main thread
 
     this.syncing_textures = this.syncTextures(config.textures); // Return promise for when config refresh finishes
 
     this.configuring = this.syncing_textures.then(() => {
-      __chunk_1.log('debug', 'updated config');
+      sources.log('debug', 'updated config');
     });
     return this.configuring;
   },
@@ -20531,11 +20649,11 @@ const SceneWorker = Object.assign(self, {
       } // compile any user-defined JS functions
 
 
-      config.sources[name] = __chunk_1.compileFunctionStrings(config.sources[name]);
+      config.sources[name] = sources.compileFunctionStrings(config.sources[name]);
       let source;
 
       try {
-        source = __chunk_1.DataSource.create(Object.assign({}, config.sources[name], {
+        source = sources.DataSource.create(Object.assign({}, config.sources[name], {
           name
         }), this.sources);
       } catch (e) {
@@ -20566,9 +20684,9 @@ const SceneWorker = Object.assign(self, {
   },
 
   // Build a tile: load from tile source if building for first time, otherwise rebuild with existing data
-  buildTile(_ref2) {
-    let tile = _ref2.tile;
-
+  buildTile({
+    tile
+  }) {
     // Tile cached?
     if (this.getTile(tile.key) != null) {
       // Already loading?
@@ -20588,36 +20706,36 @@ const SceneWorker = Object.assign(self, {
         tile.error = null;
         this.loadTileSourceData(tile).then(() => {
           if (!this.getTile(tile.key)) {
-            __chunk_1.log('trace', `stop tile build after data source load because tile was removed: ${tile.key}`);
+            sources.log('trace', `stop tile build after data source load because tile was removed: ${tile.key}`);
             return;
           } // Warn and continue on data source error
 
 
           if (tile.source_data.error) {
-            __chunk_1.log('warn', `tile load error(s) for ${tile.key}: ${tile.source_data.error}`);
+            sources.log('warn', `tile load error(s) for ${tile.key}: ${tile.source_data.error}`);
           }
 
           tile.loading = false;
           tile.loaded = true;
-          __chunk_1.Tile.buildGeometry(tile, this);
+          sources.Tile.buildGeometry(tile, this);
         }).catch(error => {
           tile.loading = false;
           tile.loaded = false;
           tile.error = error.stack;
-          __chunk_1.log('error', `tile load error for ${tile.key}: ${tile.error}`); // Send error to main thread
+          sources.log('error', `tile load error for ${tile.key}: ${tile.error}`); // Send error to main thread
 
-          __chunk_1.WorkerBroker.postMessage(`TileManager_${this.scene_id}.buildTileError`, __chunk_1.Tile.slice(tile));
+          sources.WorkerBroker.postMessage(`TileManager_${this.scene_id}.buildTileError`, sources.Tile.slice(tile));
         });
       } // Tile already loaded, just rebuild
       else {
-          __chunk_1.log('trace', `used worker cache for tile ${tile.key}`); // Build geometry
+          sources.log('trace', `used worker cache for tile ${tile.key}`); // Build geometry
 
           try {
-            __chunk_1.Tile.buildGeometry(tile, this);
+            sources.Tile.buildGeometry(tile, this);
           } catch (error) {
             // Send error to main thread
             tile.error = error.toString();
-            __chunk_1.WorkerBroker.postMessage(`TileManager_${this.scene_id}.buildTileError`, __chunk_1.Tile.slice(tile));
+            sources.WorkerBroker.postMessage(`TileManager_${this.scene_id}.buildTileError`, sources.Tile.slice(tile));
           }
         }
     });
@@ -20656,34 +20774,35 @@ const SceneWorker = Object.assign(self, {
     if (tile != null) {
       // Cancel if loading
       if (tile.loading === true) {
-        __chunk_1.log('trace', `cancel tile load for ${key}`);
+        sources.log('trace', `cancel tile load for ${key}`);
         tile.loading = false;
-        __chunk_1.Tile.cancel(tile);
+        sources.Tile.cancel(tile);
       } // Remove from cache
 
 
-      __chunk_1.FeatureSelection.clearTile(key);
+      sources.FeatureSelection.clearTile(key);
       delete this.tiles[key];
-      __chunk_1.log('trace', `remove tile from cache for ${key}`);
+      sources.log('trace', `remove tile from cache for ${key}`);
     }
   },
 
   // Query features within visible tiles, with optional filter conditions
-  queryFeatures(_ref3) {
-    let filter = _ref3.filter,
-        visible = _ref3.visible,
-        geometry = _ref3.geometry,
-        tile_keys = _ref3.tile_keys;
+  queryFeatures({
+    filter,
+    visible,
+    geometry,
+    tile_keys
+  }) {
     let features = [];
     let tiles = tile_keys.map(t => this.tiles[t]).filter(t => t && t.loaded); // Compile feature filter
 
     if (filter != null) {
       filter = ['{', '['].indexOf(filter[0]) > -1 ? JSON.parse(filter) : filter; // de-serialize if looks like an object
 
-      filter = __chunk_1.compileFunctionStrings(filter, __chunk_1.StyleParser.wrapFunction);
+      filter = sources.compileFunctionStrings(filter, sources.StyleParser.wrapFunction);
     }
 
-    filter = __chunk_1.buildFilter(filter, __chunk_1.FilterOptions);
+    filter = sources.buildFilter(filter, sources.FilterOptions);
     tiles.forEach(tile => {
       for (let layer in tile.source_data.layers) {
         let data = tile.source_data.layers[layer];
@@ -20701,7 +20820,7 @@ const SceneWorker = Object.assign(self, {
           } // Apply feature filter
 
 
-          let context = __chunk_1.StyleParser.getFeatureParseContext(feature, tile, this.global);
+          let context = sources.StyleParser.getFeatureParseContext(feature, tile, this.global);
           context.source = tile.source; // add data source name
 
           context.layer = layer; // add data source layer name
@@ -20726,8 +20845,8 @@ const SceneWorker = Object.assign(self, {
 
           if (geometry === true) {
             // Transform back to lat lng (copy geometry to avoid local modification)
-            subset.geometry = __chunk_1.Geo.copyGeometry(feature.geometry);
-            __chunk_1.Geo.tileSpaceToLatlng(subset.geometry, tile.coords.z, tile.min);
+            subset.geometry = sources.Geo.copyGeometry(feature.geometry);
+            sources.Geo.tileSpaceToLatlng(subset.geometry, tile.coords.z, tile.min);
           }
 
           features.push(subset);
@@ -20738,12 +20857,11 @@ const SceneWorker = Object.assign(self, {
   },
 
   // Get a feature from the selection map
-  getFeatureSelection(_temp) {
-    let _ref4 = _temp === void 0 ? {} : _temp,
-        id = _ref4.id,
-        key = _ref4.key;
-
-    var selection = __chunk_1.FeatureSelection.map[key];
+  getFeatureSelection({
+    id,
+    key
+  } = {}) {
+    var selection = sources.FeatureSelection.map[key];
     return {
       id: id,
       feature: selection && selection.feature
@@ -20751,17 +20869,13 @@ const SceneWorker = Object.assign(self, {
   },
 
   // Resets the feature selection state
-  resetFeatureSelection(sources) {
-    if (sources === void 0) {
-      sources = null;
-    }
-
-    __chunk_1.FeatureSelection.reset(sources);
+  resetFeatureSelection(sources$1 = null) {
+    sources.FeatureSelection.reset(sources$1);
   },
 
   // Selection map size for this worker
   getFeatureSelectionMapSize() {
-    return __chunk_1.FeatureSelection.getMapSize();
+    return sources.FeatureSelection.getMapSize();
   },
 
   // Texture info needs to be synced from main thread, e.g. width/height, which we only know after the texture loads
@@ -20772,10 +20886,10 @@ const SceneWorker = Object.assign(self, {
       textures.push(...Object.keys(tex_config));
     }
 
-    __chunk_1.log('trace', 'sync textures to worker:', textures);
+    sources.log('trace', 'sync textures to worker:', textures);
 
     if (textures.length > 0) {
-      return __chunk_1.Texture.syncTexturesToWorker(textures);
+      return sources.Texture.syncTexturesToWorker(textures);
     }
 
     return Promise.resolve();
@@ -20783,11 +20897,11 @@ const SceneWorker = Object.assign(self, {
 
   // Sync device pixel ratio from main thread
   updateDevicePixelRatio(device_pixel_ratio) {
-    __chunk_1.Utils.device_pixel_ratio = device_pixel_ratio;
+    sources.Utils.device_pixel_ratio = device_pixel_ratio;
   },
 
   clearFunctionStringCache() {
-    __chunk_1.clearFunctionStringCache();
+    sources.clearFunctionStringCache();
   },
 
   // Profiling helpers
@@ -20800,16 +20914,16 @@ const SceneWorker = Object.assign(self, {
   },
 
   debug: {
-    debugSettings: __chunk_1.debugSettings,
-    layerCache: __chunk_1.layerCache,
-    functionStringCache: __chunk_1.cache
+    debugSettings: sources.debugSettings,
+    layerCache: sources.layerCache,
+    functionStringCache: sources.cache
   }
 });
-__chunk_1.WorkerBroker.addTarget('self', SceneWorker);
+sources.WorkerBroker.addTarget('self', SceneWorker);
 
 });
 
-define(['./shared'], function (__chunk_1) { 'use strict';
+define(['./shared'], function (sources) { 'use strict';
 
 // WebGL context wrapper
 var Context;
@@ -20864,6 +20978,148 @@ Context.resize = function (gl, width, height, device_pixel_ratio) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
 };
+
+// Get a value for a nested property with path provided as an array (`a.b.c` => ['a', 'b', 'c'])
+function getPropertyPath(object, path) {
+  var _getPropertyPathTarge;
+
+  const prop = path[path.length - 1];
+  return (_getPropertyPathTarge = getPropertyPathTarget(object, path)) == null ? void 0 : _getPropertyPathTarge[prop];
+} // Set a value for a nested property with path provided as an array (`a.b.c` => ['a', 'b', 'c'])
+
+function setPropertyPath(object, path, value) {
+  const prop = path[path.length - 1];
+  const target = getPropertyPathTarget(object, path);
+
+  if (target) {
+    target[prop] = value;
+  }
+} // Get the immediate parent object for a property path name provided as an array
+// e.g. for a single-depth path, this is just `object`, for path ['a', 'b'], this is `object[a]`
+
+function getPropertyPathTarget(object, path) {
+  if (path.length === 0) {
+    return;
+  }
+
+  let target = object;
+
+  for (let i = 0; i < path.length - 1; i++) {
+    const prop = path[i];
+    target = target[prop];
+
+    if (target == null) {
+      return;
+    }
+  }
+
+  return target;
+}
+
+const GLOBAL_PREFIX = 'global.';
+const GLOBAL_PREFIX_LENGTH = GLOBAL_PREFIX.length; // name of 'hidden' (non-enumerable) property used to track global property references on an object
+
+const GLOBAL_REGISTRY = '__global_prop'; // Property name references a global property?
+
+function isGlobalReference(val) {
+  return (val == null ? void 0 : val.slice(0, GLOBAL_PREFIX_LENGTH)) === GLOBAL_PREFIX;
+} // Has object property been substitued with a value from a global reference?
+// Property provided as a single-depth string name, or nested path array (`a.b.c` => ['a', 'b', 'c'])
+
+function isGlobalSubstitution(object, prop_or_path) {
+  var _target$GLOBAL_REGIST;
+
+  const path = Array.isArray(prop_or_path) ? prop_or_path : [prop_or_path];
+  const target = getPropertyPathTarget(object, path);
+  const prop = path[path.length - 1];
+  return (target == null ? void 0 : (_target$GLOBAL_REGIST = target[GLOBAL_REGISTRY]) == null ? void 0 : _target$GLOBAL_REGIST[prop]) !== undefined;
+} // Flatten nested global properties for simpler string look-ups
+
+function flattenGlobalProperties(obj, prefix = null, globals = {}) {
+  prefix = prefix ? prefix + '.' : GLOBAL_PREFIX;
+
+  for (const p in obj) {
+    const key = prefix + p;
+    const val = obj[p];
+    globals[key] = val;
+
+    if (typeof val === 'object' && !Array.isArray(val)) {
+      flattenGlobalProperties(val, key, globals);
+    }
+  }
+
+  return globals;
+} // Find and apply new global properties (and re-apply old ones)
+
+function applyGlobalProperties(globals, obj, target, key) {
+  var _target$GLOBAL_REGIST2;
+
+  let prop; // Check for previously applied global substitution
+
+  if (target == null ? void 0 : (_target$GLOBAL_REGIST2 = target[GLOBAL_REGISTRY]) == null ? void 0 : _target$GLOBAL_REGIST2[key]) {
+    prop = target[GLOBAL_REGISTRY][key];
+  } // Check string for new global substitution
+  else if (typeof obj === 'string' && obj.slice(0, GLOBAL_PREFIX_LENGTH) === GLOBAL_PREFIX) {
+      prop = obj;
+    } // Found global property to substitute
+
+
+  if (prop) {
+    // Mark property as global substitution
+    if (target[GLOBAL_REGISTRY] == null) {
+      Object.defineProperty(target, GLOBAL_REGISTRY, {
+        value: {}
+      });
+    }
+
+    target[GLOBAL_REGISTRY][key] = prop; // Get current global value
+
+    let val = globals[prop];
+    let stack;
+
+    while (typeof val === 'string' && val.slice(0, GLOBAL_PREFIX_LENGTH) === GLOBAL_PREFIX) {
+      // handle globals that refer to other globals, detecting any cyclical references
+      stack = stack || [prop];
+
+      if (stack.indexOf(val) > -1) {
+        sources.log({
+          level: 'warn',
+          once: true
+        }, 'Global properties: cyclical reference detected', stack);
+        val = null;
+        break;
+      }
+
+      stack.push(val);
+      val = globals[val];
+    } // Create getter/setter
+
+
+    Object.defineProperty(target, key, {
+      enumerable: true,
+      get: function () {
+        return val; // return substituted value
+      },
+      set: function (v) {
+        // clear the global substitution and remove the getter/setter
+        delete target[GLOBAL_REGISTRY][key];
+        delete target[key];
+        target[key] = v; // save the new value
+      }
+    });
+  } // Loop through object keys or array indices
+  else if (Array.isArray(obj)) {
+      for (let p = 0; p < obj.length; p++) {
+        applyGlobalProperties(globals, obj[p], obj, p);
+      }
+    } else if (typeof obj === 'object') {
+      for (const p in obj) {
+        applyGlobalProperties(globals, obj[p], obj, p);
+      }
+    }
+
+  return obj;
+}
 
 var global$1 = (typeof global !== "undefined" ? global :
             typeof self !== "undefined" ? self :
@@ -22843,6 +23099,7 @@ function isSlowBuffer (obj) {
 }
 
 var bufferEs6 = /*#__PURE__*/Object.freeze({
+__proto__: null,
 INSPECT_MAX_BYTES: INSPECT_MAX_BYTES,
 kMaxLength: _kMaxLength,
 Buffer: Buffer,
@@ -22880,7 +23137,7 @@ EventEmitter.init = function() {
   this.domain = null;
   if (EventEmitter.usingDomains) {
     // if there is an active domain, then attach to it.
-    if (domain.active && !(this instanceof domain.Domain)) ;
+    if (domain.active ) ;
   }
 
   if (!this._events || this._events === Object.getPrototypeOf(this)._events) {
@@ -23545,7 +23802,7 @@ var isBufferBrowser = function isBuffer(arg) {
     && typeof arg.readUInt8 === 'function';
 };
 
-var inherits_browser = __chunk_1.createCommonjsModule(function (module) {
+var inherits_browser = sources.createCommonjsModule(function (module) {
 if (typeof Object.create === 'function') {
   // implementation from standard node.js 'util' module
   module.exports = function inherits(ctor, superCtor) {
@@ -23571,7 +23828,7 @@ if (typeof Object.create === 'function') {
 }
 });
 
-var util = __chunk_1.createCommonjsModule(function (module, exports) {
+var util = sources.createCommonjsModule(function (module, exports) {
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -23663,7 +23920,7 @@ var debugs = {};
 var debugEnviron;
 exports.debuglog = function(set) {
   if (isUndefined(debugEnviron))
-    debugEnviron = '';
+    debugEnviron =  '';
   set = set.toUpperCase();
   if (!debugs[set]) {
     if (new RegExp('\\b' + set + '\\b', 'i').test(debugEnviron)) {
@@ -24228,7 +24485,7 @@ BufferList.prototype.concat = function (n) {
   return ret;
 };
 
-var safeBuffer = __chunk_1.createCommonjsModule(function (module, exports) {
+var safeBuffer = sources.createCommonjsModule(function (module, exports) {
 /* eslint-disable node/no-deprecated-api */
 
 var Buffer = bufferEs6.Buffer;
@@ -26211,7 +26468,7 @@ Stream.prototype.pipe = function(dest, options) {
  */
 var readableStreamBrowser = Stream;
 
-var support = __chunk_1.createCommonjsModule(function (module, exports) {
+var support = sources.createCommonjsModule(function (module, exports) {
 
 exports.base64 = true;
 exports.array = true;
@@ -26419,14 +26676,14 @@ var nodejsUtils = {
     }
 };
 
-var _global = __chunk_1.createCommonjsModule(function (module) {
+var _global = sources.createCommonjsModule(function (module) {
 // https://github.com/zloirock/core-js/issues/86#issuecomment-115759028
 var global = module.exports = typeof window != 'undefined' && window.Math == Math
   ? window : typeof self != 'undefined' && self.Math == Math ? self : Function('return this')();
 if(typeof __g == 'number')__g = global; // eslint-disable-line no-undef
 });
 
-var _core = __chunk_1.createCommonjsModule(function (module) {
+var _core = sources.createCommonjsModule(function (module) {
 var core = module.exports = {version: '2.3.0'};
 if(typeof __e == 'number')__e = core; // eslint-disable-line no-undef
 });
@@ -27036,7 +27293,7 @@ var external = {
     Promise: ES6Promise
 };
 
-var utils = __chunk_1.createCommonjsModule(function (module, exports) {
+var utils = sources.createCommonjsModule(function (module, exports) {
 
 
 
@@ -27788,7 +28045,7 @@ GenericWorker.prototype = {
 
 var GenericWorker_1 = GenericWorker;
 
-var utf8 = __chunk_1.createCommonjsModule(function (module, exports) {
+var utf8 = sources.createCommonjsModule(function (module, exports) {
 
 
 
@@ -28783,7 +29040,7 @@ for(var i = 0; i < removedMethods.length; i++) {
 }
 var zipObject = ZipObject;
 
-var common = __chunk_1.createCommonjsModule(function (module, exports) {
+var common = sources.createCommonjsModule(function (module, exports) {
 
 
 var TYPED_OK =  (typeof Uint8Array !== 'undefined') &&
@@ -38570,7 +38827,7 @@ function representYamlBinary(object /*, style*/) {
 }
 
 function isBinary(object) {
-  return NodeBuffer && NodeBuffer.isBuffer(object);
+  return NodeBuffer ;
 }
 
 var binary$1 = new type('tag:yaml.org,2002:binary', {
@@ -38807,7 +39064,7 @@ var esprima;
 //
 try {
   // workaround to exclude package from browserify list.
-  var _require = __chunk_1.commonjsRequire;
+  var _require = sources.commonjsRequire;
   esprima = _require('esprima');
 } catch (_) {
   /*global window */
@@ -40543,18 +40800,14 @@ var jsYaml = {
 var jsYaml$1 = jsYaml;
 
 class SceneBundle {
-  constructor(url, path, parent) {
-    if (parent === void 0) {
-      parent = null;
-    }
-
+  constructor(url, path, parent = null) {
     this.url = url; // If a base path was provided, use it for resolving local bundle resources only if
     // the base path is absolute, or this bundle's path is relative
 
-    if (path && (!__chunk_1.isRelativeURL(path) || __chunk_1.isRelativeURL(this.url))) {
+    if (path && (!sources.isRelativeURL(path) || sources.isRelativeURL(this.url))) {
       this.path = path;
     } else {
-      this.path = __chunk_1.pathForURL(this.url);
+      this.path = sources.pathForURL(this.url);
     }
 
     this.path_for_parent = path || this.path; // for resolving paths relative to a parent bundle
@@ -40591,23 +40844,23 @@ class SceneBundle {
   }
 
   urlFor(url) {
-    if (isGlobal(url)) {
+    if (isGlobalReference(url)) {
       return url;
     }
 
-    if (__chunk_1.isRelativeURL(url) && this.container) {
+    if (sources.isRelativeURL(url) && this.container) {
       return this.parent.urlFor(this.path_for_parent + url);
     }
 
-    return __chunk_1.addBaseURL(url, this.path);
+    return sources.addBaseURL(url, this.path);
   }
 
   pathFor(url) {
-    return __chunk_1.pathForURL(url);
+    return sources.pathForURL(url);
   }
 
   typeFor(url) {
-    return __chunk_1.extensionForURL(url);
+    return sources.extensionForURL(url);
   }
 
   isContainer() {
@@ -40632,8 +40885,10 @@ class ZipSceneBundle extends SceneBundle {
     this.zip = new lib();
 
     if (typeof this.url === 'string') {
-      const data = await __chunk_1.Utils.io(this.url, 60000, 'arraybuffer');
-      await this.zip.loadAsync(data);
+      const {
+        body
+      } = await sources.Utils.io(this.url, 60000, 'arraybuffer');
+      await this.zip.loadAsync(body);
       await this.parseZipFiles();
       return this.loadRoot();
     } else {
@@ -40642,19 +40897,19 @@ class ZipSceneBundle extends SceneBundle {
   }
 
   urlFor(url) {
-    if (isGlobal(url)) {
+    if (isGlobalReference(url)) {
       return url;
     }
 
-    if (__chunk_1.isRelativeURL(url)) {
-      return this.urlForZipFile(__chunk_1.flattenRelativeURL(url));
+    if (sources.isRelativeURL(url)) {
+      return this.urlForZipFile(sources.flattenRelativeURL(url));
     }
 
     return super.urlFor(url);
   }
 
   typeFor(url) {
-    if (__chunk_1.isRelativeURL(url)) {
+    if (sources.isRelativeURL(url)) {
       return this.typeForZipFile(url);
     }
 
@@ -40668,7 +40923,7 @@ class ZipSceneBundle extends SceneBundle {
 
   findRoot() {
     // There must be a single YAML file at the top level of the zip
-    const yamls = Object.keys(this.files).filter(path => this.files[path].depth === 0).filter(path => __chunk_1.extensionForURL(path) === 'yaml');
+    const yamls = Object.keys(this.files).filter(path => this.files[path].depth === 0).filter(path => sources.extensionForURL(path) === 'yaml');
 
     if (yamls.length === 1) {
       this.root = yamls[0];
@@ -40705,7 +40960,7 @@ class ZipSceneBundle extends SceneBundle {
       let depth = path.split('/').length - 1;
       this.files[path] = {
         data: data[i],
-        type: __chunk_1.extensionForURL(path),
+        type: sources.extensionForURL(path),
         depth
       };
     }
@@ -40714,7 +40969,7 @@ class ZipSceneBundle extends SceneBundle {
   urlForZipFile(file) {
     if (this.files[file]) {
       if (!this.files[file].url) {
-        this.files[file].url = __chunk_1.createObjectURL(new Blob([this.files[file].data]));
+        this.files[file].url = sources.createObjectURL(new Blob([this.files[file].data]));
       }
 
       return this.files[file].url;
@@ -40726,51 +40981,32 @@ class ZipSceneBundle extends SceneBundle {
   }
 
 }
-function createSceneBundle(url, path, parent, type) {
-  if (type === void 0) {
-    type = null;
-  }
-
-  if (type != null && type === 'zip' || typeof url === 'string' && !__chunk_1.isLocalURL(url) && __chunk_1.extensionForURL(url) === 'zip') {
+function createSceneBundle(url, path, parent, type = null) {
+  if (type != null && type === 'zip' || typeof url === 'string' && !sources.isLocalURL(url) && sources.extensionForURL(url) === 'zip') {
     return new ZipSceneBundle(url, path, parent);
   }
 
   return new SceneBundle(url, path, parent);
-} // References a global property?
-
-function isGlobal(val) {
-  if (val && val.slice(0, 7) === 'global.') {
-    return true;
-  }
-
-  return false;
 }
 
 function parseResource(body) {
-  var data;
-
-  try {
-    // jsyaml 'json' option allows duplicate keys
-    // Keeping this for backwards compatibility, but should consider migrating to requiring
-    // unique keys, as this is YAML spec. But Tangram ES currently accepts dupe keys as well,
-    // so should consider how best to unify.
-    data = jsYaml$1.safeLoad(body, {
-      json: true
-    });
-  } catch (e) {
-    throw e;
-  }
-
-  return data;
+  // jsyaml 'json' option allows duplicate keys
+  // Keeping this for backwards compatibility, but should consider migrating to requiring
+  // unique keys, as this is YAML spec. But Tangram ES currently accepts dupe keys as well,
+  // so should consider how best to unify.
+  return jsYaml$1.safeLoad(body, {
+    json: true
+  });
 }
 
 function loadResource(source) {
   return new Promise((resolve, reject) => {
     if (typeof source === 'string') {
-      __chunk_1.Utils.io(source).then(body => {
+      sources.Utils.io(source).then(({
+        body
+      }) => {
         try {
-          let data = parseResource(body);
-          resolve(data);
+          resolve(parseResource(body));
         } catch (e) {
           reject(e);
         }
@@ -40784,24 +41020,23 @@ function loadResource(source) {
   });
 }
 
-var SceneLoader;
-var SceneLoader$1 = SceneLoader = {
+const SceneLoader = {
   // Load scenes definitions from URL & proprocess
-  async loadScene(url, _temp) {
-    let _ref = _temp === void 0 ? {} : _temp,
-        path = _ref.path,
-        type = _ref.type;
-
-    let errors = [];
+  async loadScene(url, {
+    path,
+    type
+  } = {}) {
+    const errors = [];
+    const texture_nodes = {};
     const scene = await this.loadSceneRecursive({
       url,
       path,
       type
-    }, null, errors);
-
-    const _this$finalize = this.finalize(scene),
-          config = _this$finalize.config,
-          bundle = _this$finalize.bundle;
+    }, null, texture_nodes, errors);
+    const {
+      config,
+      bundle
+    } = this.finalize(scene);
 
     if (!config) {
       // root scene failed to load, reject with first error
@@ -40809,8 +41044,8 @@ var SceneLoader$1 = SceneLoader = {
     } else if (errors.length > 0) {
       // scene loaded, but some imports had errors
       errors.forEach(error => {
-        let message = `Failed to import scene: ${error.url}`;
-        __chunk_1.log('error', message, error);
+        const message = `Failed to import scene: ${error.url}`;
+        sources.log('error', message, error);
         this.trigger('error', {
           type: 'scene_import',
           message,
@@ -40822,7 +41057,8 @@ var SceneLoader$1 = SceneLoader = {
 
     return {
       config,
-      bundle
+      bundle,
+      texture_nodes
     };
   },
 
@@ -40830,26 +41066,22 @@ var SceneLoader$1 = SceneLoader = {
   // Optional *initial* path only (won't be passed to recursive 'import' calls)
   // Useful for loading resources in base scene file from a separate location
   // (e.g. in Tangram Play, when modified local scene should still refer to original resource URLs)
-  async loadSceneRecursive(_ref2, parent, errors) {
-    let url = _ref2.url,
-        path = _ref2.path,
-        type = _ref2.type;
-
-    if (errors === void 0) {
-      errors = [];
-    }
-
+  async loadSceneRecursive({
+    url,
+    path,
+    type
+  }, parent, texture_nodes = {}, errors = []) {
     if (!url) {
       return {};
     }
 
-    let bundle = createSceneBundle(url, path, parent, type);
+    const bundle = createSceneBundle(url, path, parent, type);
 
     try {
-      let config = await bundle.load(); // debugger
+      let config = await bundle.load();
 
       if (config.import == null) {
-        this.normalize(config, bundle);
+        this.normalize(config, bundle, texture_nodes);
         return {
           config,
           bundle
@@ -40862,11 +41094,11 @@ var SceneLoader$1 = SceneLoader = {
       } // Collect URLs of scenes to import
 
 
-      let imports = [];
+      const imports = [];
       config.import.forEach(url => {
         // Convert scene objects to URLs
         if (typeof url === 'object') {
-          url = __chunk_1.createObjectURL(new Blob([JSON.stringify(url)]));
+          url = sources.createObjectURL(new Blob([JSON.stringify(url)]));
         }
 
         imports.push(bundle.resourceFor(url));
@@ -40874,14 +41106,15 @@ var SceneLoader$1 = SceneLoader = {
       delete config.import; // don't want to merge this property
       // load and normalize imports
 
-      const queue = imports.map(resource => this.loadSceneRecursive(resource, bundle, errors));
-      const configs = (await Promise.all(queue)).map(r => this.normalize(r.config, r.bundle)).map(r => r.config);
-      config = __chunk_1.mergeObjects(...configs, config);
-      this.normalize(config, bundle); // last normalize parent, after merge
+      const queue = imports.map(resource => this.loadSceneRecursive(resource, bundle, texture_nodes, errors));
+      const configs = (await Promise.all(queue)).map(r => this.normalize(r.config, r.bundle, texture_nodes)).map(r => r.config);
+      this.normalize(config, bundle, texture_nodes); // last normalize parent
 
+      config = sources.mergeObjects(...configs, config);
       return {
         config,
-        bundle
+        bundle,
+        texture_nodes
       };
     } catch (error) {
       // Collect scene load errors as we go
@@ -40892,14 +41125,15 @@ var SceneLoader$1 = SceneLoader = {
   },
 
   // Normalize properties that should be adjust within each local scene file (usually by path)
-  normalize(config, bundle) {
+  normalize(config, bundle, texture_nodes = {}) {
     this.normalizeDataSources(config, bundle);
     this.normalizeFonts(config, bundle);
     this.normalizeTextures(config, bundle);
-    this.hoistTextures(config, bundle);
+    this.collectTextures(config, bundle, texture_nodes);
     return {
       config,
-      bundle
+      bundle,
+      texture_nodes
     };
   },
 
@@ -40907,7 +41141,7 @@ var SceneLoader$1 = SceneLoader = {
   normalizeDataSources(config, bundle) {
     config.sources = config.sources || {};
 
-    for (let sn in config.sources) {
+    for (const sn in config.sources) {
       this.normalizeDataSource(config.sources[sn], bundle);
     }
 
@@ -40932,7 +41166,7 @@ var SceneLoader$1 = SceneLoader = {
       } // resolve URLs for external scripts
 
 
-      for (let s in source.scripts) {
+      for (const s in source.scripts) {
         source.scripts[s] = bundle.urlFor(source.scripts[s]);
       }
     }
@@ -40944,13 +41178,13 @@ var SceneLoader$1 = SceneLoader = {
   normalizeFonts(config, bundle) {
     config.fonts = config.fonts || {};
 
-    for (let family in config.fonts) {
+    for (const family in config.fonts) {
       if (Array.isArray(config.fonts[family])) {
         config.fonts[family].forEach(face => {
           face.url = face.url && bundle.urlFor(face.url);
         });
       } else {
-        let face = config.fonts[family];
+        const face = config.fonts[family];
         face.url = face.url && bundle.urlFor(face.url);
       }
     }
@@ -40965,8 +41199,8 @@ var SceneLoader$1 = SceneLoader = {
     // path of their immediate scene file
 
     if (config.textures) {
-      for (let tn in config.textures) {
-        let texture = config.textures[tn];
+      for (const tn in config.textures) {
+        const texture = config.textures[tn];
 
         if (texture.url) {
           texture.url = bundle.urlFor(texture.url);
@@ -40981,115 +41215,141 @@ var SceneLoader$1 = SceneLoader = {
   // - in a style's `material` properties
   // - in a style's custom uniforms (`shaders.uniforms`)
   // - in a draw groups `texture` property
-  hoistTextures(config, bundle) {
-    // Resolve URLs for inline textures
+  collectTextures(config, bundle, texture_nodes) {
+    // Inline textures in styles
     if (config.styles) {
-      for (let sn in config.styles) {
-        let style = config.styles[sn]; // Style `texture`
+      for (const sn in config.styles) {
+        const style = config.styles[sn]; // Style `texture`
 
-        let tex = style.texture;
+        const tex = style.texture;
 
         if (typeof tex === 'string' && !config.textures[tex]) {
-          style.texture = this.hoistTexture(tex, config, bundle);
+          const path = ['styles', sn, 'texture'];
+          this.addTextureNode(path, bundle, texture_nodes);
         } // Material
 
 
         if (style.material) {
           ['emission', 'ambient', 'diffuse', 'specular', 'normal'].forEach(prop => {
             // Material property has a texture
-            let tex = style.material[prop] != null && style.material[prop].texture;
+            const tex = style.material[prop] != null && style.material[prop].texture;
 
             if (typeof tex === 'string' && !config.textures[tex]) {
-              style.material[prop].texture = this.hoistTexture(tex, config, bundle);
+              const path = ['styles', sn, 'material', prop, 'texture'];
+              this.addTextureNode(path, bundle, texture_nodes);
             }
           });
         }
       }
-    } // Special handling for shader uniforms, exclude globals because they are ambiguous:
-    // could later be resolved to a string value indicating a texture, but could also be a vector or other type
+    } // Inline textures in shader uniforms
 
 
-    this.hoistStyleShaderUniformTextures(config, bundle, {
-      include_globals: false
-    }); // Resolve and hoist inline textures in draw blocks
+    if (config.styles) {
+      for (const sn in config.styles) {
+        const style = config.styles[sn];
+
+        if (style.shaders && style.shaders.uniforms) {
+          sources.GLSL.parseUniforms(style.shaders.uniforms).forEach(({
+            type,
+            value,
+            key
+          }) => {
+            // Texture by URL (string-named texture not referencing existing texture definition)
+            if (type === 'sampler2D' && typeof value === 'string' && !config.textures[value]) {
+              const path = ['styles', sn, 'shaders', 'uniforms', key];
+              this.addTextureNode(path, bundle, texture_nodes);
+            }
+          });
+        }
+      }
+    } // Inline textures in draw blocks
+
 
     if (config.layers) {
-      let stack = [config.layers];
+      const stack = [config.layers];
+      const path_stack = [['layers']];
 
       while (stack.length > 0) {
-        let layer = stack.pop(); // only recurse into objects
+        const layer = stack.pop();
+        const layer_path = path_stack.pop(); // only recurse into objects
 
         if (typeof layer !== 'object' || Array.isArray(layer)) {
           continue;
         }
 
-        for (let prop in layer) {
+        for (const prop in layer) {
           if (prop === 'draw') {
             // process draw groups for current layer
-            let draws = layer[prop];
+            const draws = layer[prop];
 
-            for (let group in draws) {
+            for (const group in draws) {
               if (draws[group].texture) {
-                let tex = draws[group].texture;
+                const tex = draws[group].texture;
 
                 if (typeof tex === 'string' && !config.textures[tex]) {
-                  draws[group].texture = this.hoistTexture(tex, config, bundle);
+                  const path = [...layer_path, prop, 'draw', group, 'texture'];
+                  this.addTextureNode(path, bundle, texture_nodes);
                 }
               } // special handling for outlines :(
 
 
               if (draws[group].outline && draws[group].outline.texture) {
-                let tex = draws[group].outline.texture;
+                const tex = draws[group].outline.texture;
 
                 if (typeof tex === 'string' && !config.textures[tex]) {
-                  draws[group].outline.texture = this.hoistTexture(tex, config, bundle);
+                  const path = [...layer_path, prop, 'draw', group, 'outline', 'texture'];
+                  this.addTextureNode(path, bundle, texture_nodes);
                 }
               }
             }
-          } else if (__chunk_1.isReserved(prop)) {
+          } else if (sources.isReserved(prop)) {
             continue; // skip reserved keyword
           } else {
             stack.push(layer[prop]); // traverse sublayer
+
+            path_stack.push([...layer_path, prop]);
           }
         }
       }
     }
   },
 
-  hoistStyleShaderUniformTextures(config, bundle, _ref3) {
-    let include_globals = _ref3.include_globals;
+  addTextureNode(path, bundle, texture_nodes) {
+    const pathKey = JSON.stringify(path);
+    texture_nodes[pathKey] = {
+      path,
+      bundle
+    };
+  },
 
-    // Resolve URLs for inline textures
-    if (config.styles) {
-      for (let sn in config.styles) {
-        let style = config.styles[sn]; // Shader uniforms
+  // Hoist any remaining inline texture nodes that don't have a corresponding named texture
+  // base_bundle is the bundle for the root scene, for resolving textures from global properties
+  hoistTextureNodes(config, base_bundle, texture_nodes = {}) {
+    for (const {
+      path,
+      bundle
+    } of Object.values(texture_nodes)) {
+      const curValue = getPropertyPath(config, path); // Make sure current property values is a string to account for global property substitutions
+      // e.g. shader uniforms are ambiguous, could be replaced with string value indicating texture,
+      // but could also be a float, an array indicating vector, etc.
 
-        if (style.shaders && style.shaders.uniforms) {
-          __chunk_1.GLSL.parseUniforms(style.shaders.uniforms).forEach((_ref4) => {
-            let type = _ref4.type,
-                value = _ref4.value,
-                key = _ref4.key,
-                uniforms = _ref4.uniforms;
-
-            // Texture by URL (string-named texture not referencing existing texture definition)
-            if (type === 'sampler2D' && typeof value === 'string' && !config.textures[value] && (include_globals || !isGlobal(value))) {
-              uniforms[key] = this.hoistTexture(value, config, bundle);
-            }
-          });
+      if (typeof curValue === 'string' && config.textures[curValue] == null) {
+        if (isGlobalSubstitution(config, path)) {
+          // global substituions are resolved against the base scene path, not the import they came from
+          const url = base_bundle.urlFor(curValue);
+          config.textures[curValue] = {
+            url
+          };
+        } else {
+          // non-global textures are resolved against the import they came from
+          const url = bundle.urlFor(curValue);
+          config.textures[url] = {
+            url
+          };
+          setPropertyPath(config, path, url);
         }
       }
     }
-  },
-
-  // Convert an inline URL texture to a global one, and return the texture's (possibly modified) name
-  hoistTexture(tex, config, bundle) {
-    let global = isGlobal(tex);
-    let url = global ? tex : bundle.urlFor(tex);
-    let name = global ? `texture-${url}` : url;
-    config.textures[name] = {
-      url
-    };
-    return name;
   },
 
   // Substitutes global scene properties (those defined in the `config.global` object) for any style values
@@ -41100,85 +41360,16 @@ var SceneLoader$1 = SceneLoader = {
       return config; // no global properties to transform
     }
 
-    const globals = flattenProperties(config.global); // flatten nested globals for simpler string look-ups
-    // Find and apply new global properties (and re-apply old ones)
+    const globals = flattenGlobalProperties(config.global); // flatten nested globals for simpler string look-ups
 
-    function applyGlobals(obj, target, key) {
-      let prop; // Check for previously applied global substitution
-
-      if (target != null && typeof target === 'object' && target._global_prop && target._global_prop[key]) {
-        prop = target._global_prop[key];
-      } // Check string for new global substitution
-      else if (typeof obj === 'string' && obj.slice(0, 7) === 'global.') {
-          prop = obj;
-        } // Found global property to substitute
-
-
-      if (prop) {
-        // Mark property as global substitution
-        if (target._global_prop == null) {
-          Object.defineProperty(target, '_global_prop', {
-            value: {}
-          });
-        }
-
-        target._global_prop[key] = prop; // Get current global value
-
-        let val = globals[prop];
-        let stack;
-
-        while (typeof val === 'string' && val.slice(0, 7) === 'global.') {
-          // handle globals that refer to other globals, detecting any cyclical references
-          stack = stack || [prop];
-
-          if (stack.indexOf(val) > -1) {
-            __chunk_1.log({
-              level: 'warn',
-              once: true
-            }, 'Global properties: cyclical reference detected', stack);
-            val = null;
-            break;
-          }
-
-          stack.push(val);
-          val = globals[val];
-        } // Create getter/setter
-
-
-        Object.defineProperty(target, key, {
-          enumerable: true,
-          get: function get() {
-            return val; // return substituted value
-          },
-          set: function set(v) {
-            // clear the global substitution and remove the getter/setter
-            delete target._global_prop[key];
-            delete target[key];
-            target[key] = v; // save the new value
-          }
-        });
-      } // Loop through object keys or array indices
-      else if (Array.isArray(obj)) {
-          for (let p = 0; p < obj.length; p++) {
-            applyGlobals(obj[p], obj, p);
-          }
-        } else if (typeof obj === 'object') {
-          for (let p in obj) {
-            applyGlobals(obj[p], obj, p);
-          }
-        }
-
-      return obj;
-    }
-
-    return applyGlobals(config);
+    return applyGlobalProperties(globals, config);
   },
 
   // Normalize some scene-wide settings that apply to the final, merged scene
-  finalize(_ref5) {
-    let config = _ref5.config,
-        bundle = _ref5.bundle;
-
+  finalize({
+    config,
+    bundle
+  }) {
     if (!config) {
       return {};
     } // Ensure top-level properties
@@ -41205,23 +41396,6 @@ var SceneLoader$1 = SceneLoader = {
       config.lights.default_light = {
         type: 'directional'
       };
-    } // Add default blend/base style pairs as needed
-
-
-    const blends = ['opaque', 'add', 'multiply', 'overlay', 'inlay', 'translucent'];
-    const bases = ['polygons', 'lines', 'points', 'text'];
-
-    for (const blend of blends) {
-      for (const base of bases) {
-        const style = blend + '_' + base;
-
-        if (config.styles[style] == null) {
-          config.styles[style] = {
-            base,
-            blend
-          };
-        }
-      }
     }
 
     return {
@@ -41230,33 +41404,8 @@ var SceneLoader$1 = SceneLoader = {
     };
   }
 
-}; // Flatten nested properties for simpler string look-ups
-
-function flattenProperties(obj, prefix, globals) {
-  if (prefix === void 0) {
-    prefix = null;
-  }
-
-  if (globals === void 0) {
-    globals = {};
-  }
-
-  prefix = prefix ? prefix + '.' : 'global.';
-
-  for (const p in obj) {
-    const key = prefix + p;
-    const val = obj[p];
-    globals[key] = val;
-
-    if (typeof val === 'object' && !Array.isArray(val)) {
-      flattenProperties(val, key, globals);
-    }
-  }
-
-  return globals;
-}
-
-__chunk_1.subscribeMixin(SceneLoader);
+};
+sources.subscribeMixin(SceneLoader);
 
 class TilePyramid {
   constructor() {
@@ -41275,7 +41424,7 @@ class TilePyramid {
     this.tiles[tile.key].tile = tile; // Add to parents
 
     while (tile.style_z >= 0) {
-      tile = __chunk_1.TileID.parent(tile);
+      tile = sources.TileID.parent(tile);
 
       if (!tile) {
         return;
@@ -41303,7 +41452,7 @@ class TilePyramid {
 
 
     while (tile.style_z >= 0) {
-      tile = __chunk_1.TileID.parent(tile);
+      tile = sources.TileID.parent(tile);
 
       if (!tile) {
         return;
@@ -41324,7 +41473,7 @@ class TilePyramid {
     let level = 0;
 
     while (level < this.max_proxy_ancestor_depth) {
-      tile = __chunk_1.TileID.parent(tile);
+      tile = sources.TileID.parent(tile);
 
       if (!tile) {
         return;
@@ -41339,15 +41488,11 @@ class TilePyramid {
   } // Find the descendant tiles for a given tile and style zoom level
 
 
-  getDescendants(tile, level) {
-    if (level === void 0) {
-      level = 0;
-    }
-
+  getDescendants(tile, level = 0) {
     let descendants = [];
 
     if (level < this.max_proxy_descendant_depth) {
-      let tiles = __chunk_1.TileID.children(tile, this.children_cache);
+      let tiles = sources.TileID.children(tile, this.children_cache);
 
       if (!tiles) {
         return;
@@ -41374,11 +41519,7 @@ let visible = {}; // currently visible labels
 
 let prev_visible = {}; // previously visible labels (in last collision run)
 
-async function mainThreadLabelCollisionPass(tiles, view_zoom, hide_breach) {
-  if (hide_breach === void 0) {
-    hide_breach = false;
-  }
-
+async function mainThreadLabelCollisionPass(tiles, view_zoom, hide_breach = false) {
   // Swap/reset visible label set
   prev_visible = visible; // save last visible label set
 
@@ -41388,17 +41529,17 @@ async function mainThreadLabelCollisionPass(tiles, view_zoom, hide_breach) {
   let containers = buildLabels(tiles, view_zoom); // Collide all labels in a single group
   // TODO: maybe rename tile and style to group/subgroup?
 
-  __chunk_1.Collision.startTile('main', {
+  sources.Collision.startTile('main', {
     apply_repeat_groups: true,
     return_hidden: true
   });
-  __chunk_1.Collision.addStyle('main', 'main'); // Adaptive collision grid, using a heuristic based on the tile with the most labels
+  sources.Collision.addStyle('main', 'main'); // Adaptive collision grid, using a heuristic based on the tile with the most labels
 
-  const max_tile_label_count = Math.max(0, ...Object.values(tiles).flatMap(t => Object.values(t.meshes)).map(m => m[0].labels && Object.keys(m[0].labels).length).filter(x => x));
-  const grid_divs = Math.floor(max_tile_label_count / __chunk_1.Geo.tile_size); // heuristic of label density to tile size
+  const max_tile_label_count = Math.max(0, ...Object.values(tiles).map(t => Object.values(t.meshes)).flat().map(meshes => Math.max(0, ...meshes.map(mesh => mesh.labels ? Object.keys(mesh.labels).length : 0))));
+  const grid_divs = Math.floor(max_tile_label_count / sources.Geo.tile_size); // heuristic of label density to tile size
 
   if (grid_divs > 0) {
-    __chunk_1.Collision.initGrid({
+    sources.Collision.initGrid({
       anchor: {
         x: Math.min(...tiles.map(t => t.min.x)),
         y: Math.min(...tiles.map(t => t.min.y))
@@ -41406,10 +41547,10 @@ async function mainThreadLabelCollisionPass(tiles, view_zoom, hide_breach) {
       span: tiles[0].span.x / grid_divs
     });
   } else {
-    __chunk_1.Collision.initGrid();
+    sources.Collision.initGrid();
   }
 
-  const labels = await __chunk_1.Collision.collide(containers, 'main', 'main'); // Update label visiblity
+  const labels = await sources.Collision.collide(containers, 'main', 'main'); // Update label visiblity
 
   let meshes = [];
   labels.forEach(container => {
@@ -41472,13 +41613,13 @@ function buildLabels(tiles, view_zoom) {
   let containers = {}; // Collect labels from each tile and turn into new label instances
 
   tiles.forEach(tile => {
-    const units_per_meter = __chunk_1.Geo.unitsPerMeter(tile.coords.z); // scale from tile units to mercator meters
+    const units_per_meter = sources.Geo.unitsPerMeter(tile.coords.z); // scale from tile units to mercator meters
 
     const zoom_scale = Math.pow(2, view_zoom - tile.style_z); // adjust label size by view zoom
 
     const size_scale = units_per_meter * zoom_scale; // scale from tile units to zoom-adjusted meters
 
-    const meters_per_pixel = __chunk_1.Geo.metersPerPixel(view_zoom); // First pass: create label instances and centralize collision containers
+    const meters_per_pixel = sources.Geo.metersPerPixel(view_zoom); // First pass: create label instances and centralize collision containers
     // Combine existing (previously collided) and pending (waiting to be collided for first time) meshes
 
     const tile_meshes = Object.assign({}, tile.meshes, tile.pending_label_meshes);
@@ -41518,24 +41659,26 @@ function buildLabels(tiles, view_zoom) {
 
             if (label.type === 'point') {
               // TODO: move to integer constants to avoid excess string copies
-              __chunk_1.LabelPoint.prototype.updateBBoxes.call(label);
+              sources.LabelPoint.prototype.updateBBoxes.call(label);
             } else if (label.type === 'straight') {
-              __chunk_1.LabelLineStraight.prototype.updateBBoxes.call(label, label.position, label.size, label.angle, label.angle, label.offset);
+              sources.LabelLineStraight.prototype.updateBBoxes.call(label, label.position, label.size, label.angle, label.angle, label.offset);
             } else if (params.obbs) {
               // NB: this is a very rough approximation of curved label collision at intermediate zooms,
               // because the position/scale of each collision box isn't correctly updated; however,
               // it's good enough to provide some additional label coverage, with less overhead
               const obbs = params.obbs.map(o => {
-                let x = o.x,
-                    y = o.y,
-                    a = o.a,
-                    w = o.w,
-                    h = o.h;
+                let {
+                  x,
+                  y,
+                  a,
+                  w,
+                  h
+                } = o;
                 x = x / units_per_meter + tile.min.x;
                 y = y / units_per_meter + tile.min.y;
                 w /= size_scale;
                 h /= size_scale;
-                return new __chunk_1.OBB(x, y, a, w, h);
+                return new sources.OBB(x, y, a, w, h);
               });
               label.obbs = obbs;
               label.aabbs = obbs.map(o => o.getExtent());
@@ -41570,14 +41713,10 @@ function buildLabels(tiles, view_zoom) {
 // (no additional logic to try alternate anchors or other layout options, etc.)
 
 
-function discard(bboxes, exclude) {
-  if (exclude === void 0) {
-    exclude = null;
-  }
-
+function discard(bboxes, exclude = null) {
   if (this.obb) {
     // single collision box
-    return __chunk_1.Label.prototype.occluded.call(this, bboxes, exclude);
+    return sources.Label.prototype.occluded.call(this, bboxes, exclude);
   } else if (this.obbs) {
     // mutliple collision boxes
     for (let i = 0; i < this.obbs.length; i++) {
@@ -41587,7 +41726,7 @@ function discard(bboxes, exclude) {
         aabb,
         obb
       };
-      let should_discard = __chunk_1.Label.prototype.occluded.call(obj, bboxes, exclude);
+      let should_discard = sources.Label.prototype.occluded.call(obj, bboxes, exclude);
 
       if (should_discard) {
         return true;
@@ -41599,8 +41738,9 @@ function discard(bboxes, exclude) {
 }
 
 class TileManager {
-  constructor(_ref) {
-    let scene = _ref.scene;
+  constructor({
+    scene
+  }) {
     this.scene = scene;
     this.tiles = {};
     this.pyramid = new TilePyramid();
@@ -41617,7 +41757,7 @@ class TileManager {
     }; // Provide a hook for this object to be called from worker threads
 
     this.main_thread_target = ['TileManager', this.scene.id].join('_');
-    __chunk_1.WorkerBroker.addTarget(this.main_thread_target, this);
+    sources.WorkerBroker.addTarget(this.main_thread_target, this);
   }
 
   destroy() {
@@ -41627,7 +41767,7 @@ class TileManager {
     this.visible_coords = {};
     this.queued_coords = [];
     this.scene = null;
-    __chunk_1.WorkerBroker.removeTarget(this.main_thread_target);
+    sources.WorkerBroker.removeTarget(this.main_thread_target);
   }
 
   get view() {
@@ -41659,7 +41799,7 @@ class TileManager {
 
 
   removeTile(key) {
-    __chunk_1.log('trace', `tile unload for ${key}`);
+    sources.log('trace', `tile unload for ${key}`);
     var tile = this.tiles[key];
 
     if (tile != null) {
@@ -41723,6 +41863,8 @@ class TileManager {
   }
 
   updateLabels() {
+    var _this = this;
+
     if (this.scene.building && !this.scene.building.initial) {
       // log('debug', `Skip label layout due to on-going scene rebuild`);
       return Promise.resolve({});
@@ -41758,19 +41900,21 @@ class TileManager {
 
       this.collision.task = {
         type: 'tileManagerUpdateLabels',
-        run: async task => {
+        run: async function (task) {
           // Do collision pass, then update view
-          const results = await mainThreadLabelCollisionPass(tiles, this.collision.zoom, this.isLoadingVisibleTiles());
-          this.scene.requestRedraw(); // Clear state to allow another collision pass to start
+          const results = await mainThreadLabelCollisionPass(tiles, _this.collision.zoom, _this.isLoadingVisibleTiles());
 
-          this.collision.task = null;
-          __chunk_1.Task.finish(task, results); // Check if tiles changed during previous collision pass - will start new pass if so
+          _this.scene.requestRedraw(); // Clear state to allow another collision pass to start
 
-          this.updateTileStates();
+
+          _this.collision.task = null;
+          sources.Task.finish(task, results); // Check if tiles changed during previous collision pass - will start new pass if so
+
+          _this.updateTileStates();
         },
         immediate: true
       };
-      __chunk_1.Task.add(this.collision.task);
+      sources.Task.add(this.collision.task);
     } // else {
     //     log('debug', `Skip label layout due to on-going layout (zoom ${this.view.zoom.toFixed(2)}, tiles ${this.collision.tile_keys})`);
     // }
@@ -41788,17 +41932,13 @@ class TileManager {
     this.forEachTile(tile => tile.setProxyFor(null));
     let proxy = false;
     this.forEachTile(tile => {
-      if (this.view.zoom_direction === 1) {
-        if (tile.visible && !tile.labeled) {
-          const parent = this.pyramid.getAncestor(tile);
+      if (tile.visible && !tile.labeled) {
+        const parent = this.pyramid.getAncestor(tile);
 
-          if (parent) {
-            parent.setProxyFor(tile);
-            proxy = true;
-          }
-        }
-      } else if (this.view.zoom_direction === -1) {
-        if (tile.visible && !tile.labeled) {
+        if (parent) {
+          parent.setProxyFor(tile);
+          proxy = true;
+        } else {
           const descendants = this.pyramid.getDescendants(tile);
 
           for (let i = 0; i < descendants.length; i++) {
@@ -41823,7 +41963,7 @@ class TileManager {
       } else {
         // brute force
         for (let key in this.visible_coords) {
-          if (__chunk_1.TileID.isDescendant(tile.coords, this.visible_coords[key])) {
+          if (sources.TileID.isDescendant(tile.coords, this.visible_coords[key])) {
             tile.visible = true;
             break;
           }
@@ -41877,11 +42017,11 @@ class TileManager {
 
     this.queued_coords.sort((a, b) => {
       let center = this.view.center.meters;
-      let half_span = __chunk_1.Geo.metersPerTile(a.z) / 2;
-      let ac = __chunk_1.Geo.metersForTile(a);
+      let half_span = sources.Geo.metersPerTile(a.z) / 2;
+      let ac = sources.Geo.metersForTile(a);
       ac.x += half_span;
       ac.y -= half_span;
-      let bc = __chunk_1.Geo.metersForTile(b);
+      let bc = sources.Geo.metersForTile(b);
       bc.x += half_span;
       bc.y -= half_span;
       let ad = Math.abs(center.x - ac.x) + Math.abs(center.y - ac.y);
@@ -41909,11 +42049,11 @@ class TileManager {
         continue;
       }
 
-      let key = __chunk_1.TileID.normalizedKey(coords, source, this.view.tile_zoom);
+      let key = sources.TileID.normalizedKey(coords, source, this.view.tile_zoom);
 
       if (key && !this.hasTile(key)) {
-        __chunk_1.log('trace', `load tile ${key}, distance from view center: ${coords.center_dist}`);
-        let tile = new __chunk_1.Tile({
+        sources.log('trace', `load tile ${key}, distance from view center: ${coords.center_dist}`);
+        let tile = new sources.Tile({
           source,
           coords,
           workers: this.scene.workers,
@@ -41934,27 +42074,27 @@ class TileManager {
   } // Called on main thread when a web worker completes processing for a single tile (initial load, or rebuild)
 
 
-  buildTileStylesCompleted(_ref2) {
-    let tile = _ref2.tile,
-        progress = _ref2.progress;
-
+  buildTileStylesCompleted({
+    tile,
+    progress
+  }) {
     // Removed this tile during load?
     if (this.tiles[tile.key] == null) {
-      __chunk_1.log('trace', `discarded tile ${tile.key} in TileManager.buildTileStylesCompleted because previously removed`);
-      __chunk_1.Tile.abortBuild(tile);
+      sources.log('trace', `discarded tile ${tile.key} in TileManager.buildTileStylesCompleted because previously removed`);
+      sources.Tile.abortBuild(tile);
       this.updateTileStates();
     } // Built with an outdated scene configuration?
     else if (tile.generation !== this.scene.generation) {
-        __chunk_1.log('trace', `discarded tile ${tile.key} in TileManager.buildTileStylesCompleted because built with ` + `scene config gen ${tile.generation}, current ${this.scene.generation}`);
-        __chunk_1.Tile.abortBuild(tile);
+        sources.log('trace', `discarded tile ${tile.key} in TileManager.buildTileStylesCompleted because built with ` + `scene config gen ${tile.generation}, current ${this.scene.generation}`);
+        sources.Tile.abortBuild(tile);
         this.updateTileStates();
       } else {
         // Update tile with properties from worker
         if (this.tiles[tile.key]) {
           // Ignore if from a previously discarded tile
           if (tile.id < this.tiles[tile.key].id) {
-            __chunk_1.log('trace', `discarded tile ${tile.key} for id ${tile.id} in TileManager.buildTileStylesCompleted because built for discarded tile id`);
-            __chunk_1.Tile.abortBuild(tile);
+            sources.log('trace', `discarded tile ${tile.key} for id ${tile.id} in TileManager.buildTileStylesCompleted because built for discarded tile id`);
+            sources.Tile.abortBuild(tile);
             return;
           }
 
@@ -41977,22 +42117,22 @@ class TileManager {
 
 
   buildTileError(tile) {
-    __chunk_1.log('error', `Error building tile ${tile.key}:`, tile.error);
+    sources.log('error', `Error building tile ${tile.key}:`, tile.error);
     this.forgetTile(tile.key);
-    __chunk_1.Tile.abortBuild(tile);
+    sources.Tile.abortBuild(tile);
   } // Track tile build state
 
 
   tileBuildStart(key) {
     this.building_tiles = this.building_tiles || {};
     this.building_tiles[key] = true;
-    __chunk_1.log('trace', `tileBuildStart for ${key}: ${Object.keys(this.building_tiles).length}`);
+    sources.log('trace', `tileBuildStart for ${key}: ${Object.keys(this.building_tiles).length}`);
   }
 
   tileBuildStop(key) {
     // Done building?
     if (this.building_tiles) {
-      __chunk_1.log('trace', `tileBuildStop for ${key}: ${Object.keys(this.building_tiles).length}`);
+      sources.log('trace', `tileBuildStop for ${key}: ${Object.keys(this.building_tiles).length}`);
       delete this.building_tiles[key];
       this.checkBuildQueue();
     }
@@ -42040,21 +42180,15 @@ class TileManager {
 } // Round a number to given number of decimal divisions
 // e.g. roundPrecision(x, 4) rounds a number to increments of 0.25
 
-function roundPrecision(x, d, places) {
-  if (places === void 0) {
-    places = 2;
-  }
-
+function roundPrecision(x, d, places = 2) {
   return (Math.floor(x * d) / d).toFixed(places);
 } // Create a string representing the current set of meshes for a given set of tiles,
 // based on their created timestamp. Used to determine when tiles should be re-collided.
 
 
 function meshSetString(tiles) {
-  return JSON.stringify(Object.entries(tiles).map((_ref3) => {
-    let t = _ref3[1];
-    return Object.entries(t.meshes).map((_ref4) => {
-      let s = _ref4[1];
+  return JSON.stringify(Object.entries(tiles).map(([, t]) => {
+    return Object.entries(t.meshes).map(([, s]) => {
       return s.map(m => m.created_at);
     });
   }));
@@ -42145,7 +42279,6 @@ class RenderStateManager {
 
 }
 
-/* global MediaRecorder, ImageData */
 class MediaCapture {
   constructor() {
     this.canvas = null;
@@ -42163,10 +42296,9 @@ class MediaCapture {
   // `background`: optional background color to blend screenshot with
 
 
-  screenshot(_temp) {
-    let _ref = _temp === void 0 ? {} : _temp,
-        background = _ref.background;
-
+  screenshot({
+    background
+  } = {}) {
     if (this.queue_screenshot != null) {
       return this.queue_screenshot.promise; // only capture one screenshot at a time
     } // Will resolve once rendering is complete and render buffer is captured
@@ -42198,7 +42330,7 @@ class MediaCapture {
       let background = this.queue_screenshot.background;
 
       if (background && background !== 'transparent') {
-        background = __chunk_1.StyleParser.parseColor(background).slice(0, 3).map(c => c * 255);
+        background = sources.StyleParser.parseColor(background).slice(0, 3).map(c => c * 255);
       } else {
         background = null; // skip blend if transparent
       } // Flip Y (GL buffer is upside down)
@@ -42265,10 +42397,10 @@ class MediaCapture {
 
   startVideoCapture() {
     if (typeof window.MediaRecorder !== 'function' || !this.canvas || typeof this.canvas.captureStream !== 'function') {
-      __chunk_1.log('warn', 'Video capture (Canvas.captureStream and/or MediaRecorder APIs) not supported by browser');
+      sources.log('warn', 'Video capture (Canvas.captureStream and/or MediaRecorder APIs) not supported by browser');
       return false;
     } else if (this.video_capture) {
-      __chunk_1.log('warn', 'Video capture already in progress, call Scene.stopVideoCapture() first');
+      sources.log('warn', 'Video capture already in progress, call Scene.stopVideoCapture() first');
       return false;
     } // Start a new capture
 
@@ -42293,7 +42425,7 @@ class MediaCapture {
           let blob = new Blob(cap.chunks, {
             type: cap.options.mimeType
           });
-          let url = __chunk_1.createObjectURL(blob); // Explicitly remove all stream tracks, and set objects to null
+          let url = sources.createObjectURL(blob); // Explicitly remove all stream tracks, and set objects to null
 
           if (cap.stream) {
             let tracks = cap.stream.getTracks() || [];
@@ -42317,7 +42449,7 @@ class MediaCapture {
       cap.media_recorder.start();
     } catch (e) {
       this.video_capture = null;
-      __chunk_1.log('error', 'Scene video capture failed', e);
+      sources.log('error', 'Scene video capture failed', e);
       return false;
     }
 
@@ -42327,7 +42459,7 @@ class MediaCapture {
 
   stopVideoCapture() {
     if (!this.video_capture) {
-      __chunk_1.log('warn', 'No scene video capture in progress, call Scene.startVideoCapture() first');
+      sources.log('warn', 'No scene video capture in progress, call Scene.startVideoCapture() first');
       return Promise.resolve({});
     } // Promise that will resolve when final stream is available
 
@@ -42349,25 +42481,17 @@ function setupSceneDebug(scene) {
     profile(name) {
       console.profile(`main thread: ${name}`); // eslint-disable-line no-console
 
-      __chunk_1.WorkerBroker.postMessage(scene.workers, 'self.profile', name);
+      sources.WorkerBroker.postMessage(scene.workers, 'self.profile', name);
     },
 
     profileEnd(name) {
       console.profileEnd(`main thread: ${name}`); // eslint-disable-line no-console
 
-      __chunk_1.WorkerBroker.postMessage(scene.workers, 'self.profileEnd', name);
+      sources.WorkerBroker.postMessage(scene.workers, 'self.profileEnd', name);
     },
 
     // Rebuild geometry a given # of times and print average, min, max timings
-    timeRebuild(num, options) {
-      if (num === void 0) {
-        num = 1;
-      }
-
-      if (options === void 0) {
-        options = {};
-      }
-
+    timeRebuild(num = 1, options = {}) {
       let times = [];
 
       let cycle = () => {
@@ -42379,7 +42503,7 @@ function setupSceneDebug(scene) {
             cycle();
           } else {
             let avg = ~~(times.reduce((a, b) => a + b) / times.length);
-            __chunk_1.log('info', `Profiled rebuild ${num} times: ${avg} avg (${Math.min(...times)} min, ${Math.max(...times)} max)`);
+            sources.log('info', `Profiled rebuild ${num} times: ${avg} avg (${Math.min(...times)} min, ${Math.max(...times)} max)`);
           }
         });
       };
@@ -42457,14 +42581,14 @@ function setupSceneDebug(scene) {
 
     // Return sum of all texture memory usage
     textureSizeTotal() {
-      return Object.values(__chunk_1.Texture.textures).map(t => t.byteSize()).reduce((p, c) => p + c);
+      return Object.values(sources.Texture.textures).map(t => t.byteSize()).reduce((p, c) => p + c);
     },
 
     layerStats() {
-      if (__chunk_1.debugSettings.layer_stats) {
-        return __chunk_1.debugSumLayerStats(scene.tile_manager.getRenderableTiles());
+      if (sources.debugSettings.layer_stats) {
+        return sources.debugSumLayerStats(scene.tile_manager.getRenderableTiles());
       } else {
-        __chunk_1.log('warn', 'Enable the \'layer_stats\' debug setting to collect layer stats');
+        sources.log('warn', 'Enable the \'layer_stats\' debug setting to collect layer stats');
         return {};
       }
     },
@@ -42479,30 +42603,30 @@ function setupSceneDebug(scene) {
 class Scene {
   constructor(config_source, options) {
     options = options || {};
-    __chunk_1.subscribeMixin(this);
+    sources.subscribeMixin(this);
     this.id = Scene.id++;
     this.initialized = false;
     this.initializing = null; // will be a promise that resolves when scene is loaded
 
     this.sources = {};
-    this.view = new __chunk_1.View(this, options);
+    this.view = new sources.View(this, options);
     this.tile_manager = new TileManager({
       scene: this
     });
     this.num_workers = options.numWorkers || 2;
 
     if (options.disableVertexArrayObjects === true) {
-      __chunk_1.VertexArrayObject.disabled = true;
+      sources.VertexArrayObject.disabled = true;
     }
 
-    __chunk_1.Utils.use_high_density_display = options.highDensityDisplay !== undefined ? options.highDensityDisplay : true;
-    __chunk_1.Utils.updateDevicePixelRatio();
+    sources.Utils.use_high_density_display = options.highDensityDisplay !== undefined ? options.highDensityDisplay : true;
+    sources.Utils.updateDevicePixelRatio();
     this.config = null;
     this.config_source = config_source;
     this.config_bundle = null;
     this.last_valid_config_source = null;
     this.styles = null;
-    this.style_manager = new __chunk_1.StyleManager();
+    this.style_manager = new sources.StyleManager();
     this.building = null; // tracks current scene building state (tiles being built, etc.)
 
     this.dirty = true; // request a redraw
@@ -42556,15 +42680,11 @@ class Scene {
 
     setupSceneDebug(this);
     this.log_level = options.logLevel || 'warn';
-    __chunk_1.log.setLevel(this.log_level);
-    __chunk_1.log.reset();
+    sources.log.setLevel(this.log_level);
+    sources.log.reset();
   }
 
-  static create(config, options) {
-    if (options === void 0) {
-      options = {};
-    }
-
+  static create(config, options = {}) {
     return new Scene(config, options);
   } // Load scene (or reload existing scene if no new source specified)
   // Options:
@@ -42572,20 +42692,14 @@ class Scene {
   //   `blocking`: should rendering block on scene load completion (default true)
 
 
-  load(config_source, options) {
-    if (config_source === void 0) {
-      config_source = null;
-    }
-
-    if (options === void 0) {
-      options = {};
-    }
+  load(config_source = null, options = {}) {
+    var _this = this;
 
     if (this.initializing) {
       return this.initializing;
     }
 
-    __chunk_1.log.reset();
+    sources.log.reset();
     this.updating++;
     this.initialized = false;
     this.view_complete = false; // track if a view complete event has been triggered yet
@@ -42610,14 +42724,20 @@ class Scene {
     this.createCanvas();
     this.prev_textures = this.config && Object.keys(this.config.textures); // save textures from last scene
 
-    this.initializing = this.loadScene(config_source, options).then(() => this.createWorkers()).then(() => {
-      // Clean up resources from prior scene
-      this.destroyFeatureSelection();
-      __chunk_1.WorkerBroker.postMessage(this.workers, 'self.clearFunctionStringCache'); // Scene loaded from a JS object, or modified by a `load` event, may contain compiled JS functions
+    this.initializing = this.loadScene(config_source, options).then(async function ({
+      texture_nodes
+    }) {
+      await _this.createWorkers(); // Clean up resources from prior scene
+
+      _this.destroyFeatureSelection();
+
+      sources.WorkerBroker.postMessage(_this.workers, 'self.clearFunctionStringCache'); // Scene loaded from a JS object, or modified by a `load` event, may contain compiled JS functions
       // which need to be serialized, while one loaded only from a URL does not.
 
-      const serialize_funcs = typeof this.config_source === 'object' || this.hasSubscribersFor('load');
-      const updating = this.updateConfig({
+      const serialize_funcs = typeof _this.config_source === 'object' || _this.hasSubscribersFor('load');
+
+      const updating = _this.updateConfig({
+        texture_nodes,
         serialize_funcs,
         normalize: false,
         loading: true,
@@ -42625,19 +42745,21 @@ class Scene {
       });
 
       if (options.blocking === true) {
-        return updating;
+        await updating;
       }
-    }).then(() => {
-      this.freePreviousTextures();
-      this.updating--;
-      this.initializing = null;
-      this.initialized = true;
-      this.last_valid_config_source = this.config_source;
-      this.last_valid_options = {
+
+      _this.freePreviousTextures();
+
+      _this.updating--;
+      _this.initializing = null;
+      _this.initialized = true;
+      _this.last_valid_config_source = _this.config_source;
+      _this.last_valid_options = {
         base_path: options.base_path,
         file_type: options.file_type
       };
-      this.requestRedraw();
+
+      _this.requestRedraw();
     }).catch(error => {
       this.initializing = null;
       this.updating = 0; // Report and revert to last valid config if available
@@ -42661,12 +42783,12 @@ class Scene {
       message = `Scene.load() failed to load ${JSON.stringify(this.config_source)}: ${error.message}`;
 
       if (this.last_valid_config_source) {
-        __chunk_1.log('warn', message, error);
-        __chunk_1.log('info', 'Scene.load() reverting to last valid configuration');
+        sources.log('warn', message, error);
+        sources.log('info', 'Scene.load() reverting to last valid configuration');
         return this.load(this.last_valid_config_source, this.last_valid_base_path);
       }
 
-      __chunk_1.log('error', message, error);
+      sources.log('error', message, error);
       throw error;
     });
     return this.initializing;
@@ -42687,10 +42809,10 @@ class Scene {
     this.container = null;
 
     if (this.gl) {
-      __chunk_1.Texture.destroy(this.gl);
+      sources.Texture.destroy(this.gl);
       this.style_manager.destroy(this.gl);
       this.styles = {};
-      __chunk_1.ShaderProgram.reset(); // Force context loss
+      sources.ShaderProgram.reset(); // Force context loss
 
       let ext = this.gl.getExtension('WEBGL_lose_context');
 
@@ -42705,7 +42827,7 @@ class Scene {
     this.destroyWorkers();
     this.tile_manager.destroy();
     this.tile_manager = null;
-    __chunk_1.log.reset();
+    sources.log.reset();
   }
 
   createCanvas() {
@@ -42727,7 +42849,7 @@ class Scene {
         alpha: true,
         premultipliedAlpha: true,
         stencil: true,
-        device_pixel_ratio: __chunk_1.Utils.device_pixel_ratio,
+        device_pixel_ratio: sources.Utils.device_pixel_ratio,
         powerPreference: 'high-performance'
       }, this.contextOptions));
     } catch (e) {
@@ -42735,7 +42857,7 @@ class Scene {
     }
 
     this.resizeMap(this.container.clientWidth, this.container.clientHeight);
-    __chunk_1.VertexArrayObject.init(this.gl);
+    sources.VertexArrayObject.init(this.gl);
     this.render_states = new RenderStateManager(this.gl);
     this.media_capture.setCanvas(this.canvas, this.gl);
   } // Update list of any custom scripts (either at scene-level or data-source-level)
@@ -42797,21 +42919,21 @@ class Scene {
       let worker = new Worker(Tangram.workerURL); // eslint-disable-line no-undef
 
       this.workers[id] = worker;
-      __chunk_1.WorkerBroker.addWorker(worker);
-      __chunk_1.log('debug', `Scene.makeWorkers: initializing worker ${id}`);
+      sources.WorkerBroker.addWorker(worker);
+      sources.log('debug', `Scene.makeWorkers: initializing worker ${id}`);
       let _id = id;
-      queue.push(__chunk_1.WorkerBroker.postMessage(worker, 'self.init', this.id, id, this.num_workers, this.log_level, __chunk_1.Utils.device_pixel_ratio, has_element_index_uint, this.external_scripts).then(id => {
-        __chunk_1.log('debug', `Scene.makeWorkers: initialized worker ${id}`);
+      queue.push(sources.WorkerBroker.postMessage(worker, 'self.init', this.id, id, this.num_workers, this.log_level, sources.Utils.device_pixel_ratio, has_element_index_uint, this.external_scripts).then(id => {
+        sources.log('debug', `Scene.makeWorkers: initialized worker ${id}`);
         return id;
       }, error => {
-        __chunk_1.log('error', `Scene.makeWorkers: failed to initialize worker ${_id}:`, error);
+        sources.log('error', `Scene.makeWorkers: failed to initialize worker ${_id}:`, error);
         return Promise.reject(error);
       }));
     }
 
     this.next_worker = 0;
     return Promise.all(queue).then(() => {
-      __chunk_1.log.setWorkers(this.workers);
+      sources.log.setWorkers(this.workers);
     });
   }
 
@@ -42819,7 +42941,7 @@ class Scene {
     this.selection = null; // selection needs to be re-initialized when workers are
 
     if (Array.isArray(this.workers)) {
-      __chunk_1.log.setWorkers(null);
+      sources.log.setWorkers(null);
       this.workers.forEach(worker => {
         worker.terminate();
       });
@@ -42838,8 +42960,8 @@ class Scene {
 
 
   updateDevicePixelRatio() {
-    if (__chunk_1.Utils.updateDevicePixelRatio()) {
-      __chunk_1.WorkerBroker.postMessage(this.workers, 'self.updateDevicePixelRatio', __chunk_1.Utils.device_pixel_ratio).then(() => this.rebuild()).then(() => this.resizeMap(this.view.size.css.width, this.view.size.css.height));
+    if (sources.Utils.updateDevicePixelRatio()) {
+      sources.WorkerBroker.postMessage(this.workers, 'self.updateDevicePixelRatio', sources.Utils.device_pixel_ratio).then(() => this.rebuild()).then(() => this.resizeMap(this.view.size.css.width, this.view.size.css.height));
     }
   }
 
@@ -42852,7 +42974,7 @@ class Scene {
     this.view.setViewportSize(width, height);
 
     if (this.gl) {
-      Context$1.resize(this.gl, width, height, __chunk_1.Utils.device_pixel_ratio);
+      Context$1.resize(this.gl, width, height, sources.Utils.device_pixel_ratio);
     }
   } // Request scene be redrawn at next animation loop
 
@@ -42875,10 +42997,10 @@ class Scene {
 
     this.update(); // Pending background tasks
 
-    __chunk_1.Task.setState({
+    sources.Task.setState({
       user_moving_view: this.view.user_input_active
     });
-    __chunk_1.Task.processAll(); // Request the next frame if not scheduled to stop
+    sources.Task.processAll(); // Request the next frame if not scheduled to stop
 
     if (!this.render_loop_stop) {
       window.requestAnimationFrame(this.renderLoop.bind(this));
@@ -42931,14 +43053,15 @@ class Scene {
     }
 
     this.frame++;
-    __chunk_1.log('trace', 'Scene.render()');
+    sources.log('trace', 'Scene.render()');
     return true;
   } // Accepts flags indicating which render passes should be made
 
 
-  render(_ref) {
-    let main = _ref.main,
-        selection = _ref.selection;
+  render({
+    main,
+    selection
+  }) {
     var gl = this.gl;
     this.updateBackground();
     Object.keys(this.lights).forEach(i => this.lights[i].update()); // Render main pass
@@ -42954,7 +43077,7 @@ class Scene {
         this.logFirstFrame();
         this.getFeatureSelectionMapSize().then(size => {
           this.selection_feature_count = size;
-          __chunk_1.log('info', `Scene: rendered ${this.render_count} primitives (${size} features in selection map)`);
+          sources.log('info', `Scene: rendered ${this.render_count} primitives (${size} features in selection map)`);
         });
       }
 
@@ -42993,14 +43116,9 @@ class Scene {
   // Called both for main render pass, and for secondary passes like selection buffer
 
 
-  renderPass(program_key, _temp) {
-    if (program_key === void 0) {
-      program_key = 'program';
-    }
-
-    let _ref2 = _temp === void 0 ? {} : _temp,
-        allow_blend = _ref2.allow_blend;
-
+  renderPass(program_key = 'program', {
+    allow_blend
+  } = {}) {
     // optionally force alpha off (e.g. for selection pass)
     allow_blend = allow_blend == null ? true : allow_blend;
     this.clearFrame();
@@ -43011,10 +43129,10 @@ class Scene {
 
     const blend_orders = this.style_manager.getActiveBlendOrders();
 
-    for (const _ref3 of blend_orders) {
-      const blend_order = _ref3.blend_order;
-      const styles = _ref3.styles;
-
+    for (const {
+      blend_order,
+      styles
+    } of blend_orders) {
       // Render each style
       for (let s = 0; s < styles.length; s++) {
         let style = this.styles[styles[s]];
@@ -43025,11 +43143,11 @@ class Scene {
 
 
         if (style.blend !== last_blend) {
-          let state = Object.assign({}, __chunk_1.Style.render_states[style.blend], // render state for blend mode
+          let state = Object.assign({}, sources.Style.render_states[style.blend], // render state for blend mode
           {
-            blend: allow_blend && style.blend // enable/disable blending (e.g. no blend for selection)
-
-          });
+            blend: allow_blend && style.blend
+          } // enable/disable blending (e.g. no blend for selection)
+          );
           this.setRenderState(state);
         }
 
@@ -43098,11 +43216,7 @@ class Scene {
     return count;
   }
 
-  renderStyle(style_name, program_key, blend_order, proxy_level) {
-    if (proxy_level === void 0) {
-      proxy_level = null;
-    }
-
+  renderStyle(style_name, program_key, blend_order, proxy_level = null) {
     let style = this.styles[style_name];
     let first_for_style = true; // TODO: allow this state to be passed in (for multilpe blend orders, stencil tests, etc)
 
@@ -43121,16 +43235,13 @@ class Scene {
     // Mesh variants must be rendered in requested order across tiles, to prevent labels that cross
     // tile boundaries from rendering over adjacent tile features meant to be underneath
 
-    let max_mesh_order = Math.max(...tile_meshes.map((_ref4) => {
-      let meshes = _ref4[1];
+    let max_mesh_order = Math.max(...tile_meshes.map(([, meshes]) => {
       return Math.max(...meshes.map(m => m.variant.mesh_order));
     })); // One pass per mesh variant order (loop goes to max value +1 because 0 is a valid order value)
 
     for (let mo = 0; mo < max_mesh_order + 1; mo++) {
       // Loop over tiles, with meshes pre-filtered by current blend order
-      for (let _ref5 of tile_meshes) {
-        let tile = _ref5[0];
-        let meshes = _ref5[1];
+      for (let [tile, meshes] of tile_meshes) {
         let first_for_tile = true; // Skip proxy tiles if new tiles have finished loading this style
 
         if (!tile.shouldProxyForStyle(style_name)) {
@@ -43222,13 +43333,12 @@ class Scene {
     this.gl.clear(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT | this.gl.STENCIL_BUFFER_BIT);
   }
 
-  setRenderState(_temp2) {
-    let _ref6 = _temp2 === void 0 ? {} : _temp2,
-        depth_test = _ref6.depth_test,
-        depth_write = _ref6.depth_write,
-        cull_face = _ref6.cull_face,
-        blend = _ref6.blend;
-
+  setRenderState({
+    depth_test,
+    depth_write,
+    cull_face,
+    blend
+  } = {}) {
     if (!this.initialized) {
       return;
     } // Defaults
@@ -43297,12 +43407,11 @@ class Scene {
   } // Request feature selection at given pixel. Runs async and returns results via a promise.
 
 
-  getFeatureAt(pixel, _temp3) {
-    let _ref7 = _temp3 === void 0 ? {} : _temp3,
-        radius = _ref7.radius;
-
+  getFeatureAt(pixel, {
+    radius
+  } = {}) {
     if (!this.initialized) {
-      __chunk_1.log('debug', 'Scene.getFeatureAt() called before scene was initialized');
+      sources.log('debug', 'Scene.getFeatureAt() called before scene was initialized');
       return Promise.resolve();
     } // skip selection if no interactive features
 
@@ -43341,30 +43450,25 @@ class Scene {
   } // Query features within visible tiles, with optional filter conditions
 
 
-  async queryFeatures(_temp4) {
-    let _ref8 = _temp4 === void 0 ? {} : _temp4,
-        filter = _ref8.filter,
-        _ref8$unique = _ref8.unique,
-        unique = _ref8$unique === void 0 ? true : _ref8$unique,
-        _ref8$group_by = _ref8.group_by,
-        group_by = _ref8$group_by === void 0 ? null : _ref8$group_by,
-        _ref8$visible = _ref8.visible,
-        visible = _ref8$visible === void 0 ? null : _ref8$visible,
-        _ref8$geometry = _ref8.geometry,
-        geometry = _ref8$geometry === void 0 ? false : _ref8$geometry;
-
+  async queryFeatures({
+    filter,
+    unique = true,
+    group_by = null,
+    visible = null,
+    geometry = false
+  } = {}) {
     if (!this.initialized) {
       return [];
     }
 
-    filter = __chunk_1.Utils.serializeWithFunctions(filter); // Optional uniqueify criteria
+    filter = sources.Utils.serializeWithFunctions(filter); // Optional uniqueify criteria
     // Valid values: true, false/null, single property name, or array of property names
 
     unique = typeof unique === 'string' ? [unique] : unique;
     const uniqueify_on_id = unique === true || Array.isArray(unique) && unique.indexOf('$id') > -1;
 
     const uniqueify = unique && (obj => {
-      const properties = Array.isArray(unique) ? __chunk_1.sliceObject(obj.properties, unique) : obj.properties;
+      const properties = Array.isArray(unique) ? sources.sliceObject(obj.properties, unique) : obj.properties;
       const id = uniqueify_on_id ? obj.id : null;
 
       if (geometry) {
@@ -43387,11 +43491,11 @@ class Scene {
     group_by = (typeof group_by === 'string' || Array.isArray(group_by)) && group_by;
 
     const group = group_by && (obj => {
-      return Array.isArray(group_by) ? JSON.stringify(__chunk_1.sliceObject(obj, group_by)) : obj[group_by];
+      return Array.isArray(group_by) ? JSON.stringify(sources.sliceObject(obj, group_by)) : obj[group_by];
     });
 
     const tile_keys = this.tile_manager.getRenderableTiles().map(t => t.key);
-    const results = await __chunk_1.WorkerBroker.postMessage(this.workers, 'self.queryFeatures', {
+    const results = await sources.WorkerBroker.postMessage(this.workers, 'self.queryFeatures', {
       filter,
       visible,
       geometry,
@@ -43425,27 +43529,21 @@ class Scene {
   // sources: optional array of data sources to selectively rebuild (by default all our rebuilt)
 
 
-  rebuild(_temp5) {
-    let _ref9 = _temp5 === void 0 ? {} : _temp5,
-        _ref9$initial = _ref9.initial,
-        initial = _ref9$initial === void 0 ? false : _ref9$initial,
-        _ref9$new_generation = _ref9.new_generation,
-        new_generation = _ref9$new_generation === void 0 ? true : _ref9$new_generation,
-        _ref9$sources = _ref9.sources,
-        sources = _ref9$sources === void 0 ? null : _ref9$sources,
-        serialize_funcs = _ref9.serialize_funcs,
-        _ref9$profile = _ref9.profile,
-        profile = _ref9$profile === void 0 ? false : _ref9$profile,
-        _ref9$fade_in = _ref9.fade_in,
-        fade_in = _ref9$fade_in === void 0 ? false : _ref9$fade_in;
-
+  rebuild({
+    initial = false,
+    new_generation = true,
+    sources: sources$1 = null,
+    serialize_funcs,
+    profile = false,
+    fade_in = false
+  } = {}) {
     return new Promise((resolve, reject) => {
       // Skip rebuild if already in progress
       if (this.building) {
         // Queue up to one rebuild call at a time, only save last request
         if (this.building.queued && this.building.queued.reject) {
           // notify previous request that it did not complete
-          __chunk_1.log('debug', 'Scene.rebuild: request superceded by a newer call');
+          sources.log('debug', 'Scene.rebuild: request superceded by a newer call');
           this.building.queued.resolve(false); // false flag indicates rebuild request was superceded
         } // Save queued request
 
@@ -43453,7 +43551,7 @@ class Scene {
         let options = {
           initial,
           new_generation,
-          sources,
+          sources: sources$1,
           serialize_funcs,
           profile,
           fade_in
@@ -43463,7 +43561,7 @@ class Scene {
           reject,
           options
         };
-        __chunk_1.log('trace', 'Scene.rebuild(): queuing request');
+        sources.log('trace', 'Scene.rebuild(): queuing request');
         return;
       } // Track tile build state
 
@@ -43492,12 +43590,12 @@ class Scene {
       this.syncConfigToWorker({
         serialize_funcs
       });
-      this.resetWorkerFeatureSelection(sources);
+      this.resetWorkerFeatureSelection(sources$1);
       this.resetTime(); // Rebuild visible tiles
 
       this.tile_manager.pruneToVisibleTiles();
       this.tile_manager.forEachTile(tile => {
-        if (!sources || sources.indexOf(tile.source.name) > -1) {
+        if (!sources$1 || sources$1.indexOf(tile.source.name) > -1) {
           this.tile_manager.buildTile(tile, {
             fade_in
           });
@@ -43517,10 +43615,10 @@ class Scene {
 
 
   tileManagerBuildDone() {
-    __chunk_1.TextCanvas.pruneTextCache();
+    sources.TextCanvas.pruneTextCache();
 
     if (this.building) {
-      __chunk_1.log('info', 'Scene: build geometry finished');
+      sources.log('info', 'Scene: build geometry finished');
 
       if (this.building.resolve) {
         this.logFirstBuild();
@@ -43532,7 +43630,7 @@ class Scene {
       this.building = null;
 
       if (queued) {
-        __chunk_1.log('debug', 'Scene: starting queued rebuild() request');
+        sources.log('debug', 'Scene: starting queued rebuild() request');
         this.rebuild(queued.options).then(queued.resolve, queued.reject);
       } else {
         this.tile_manager.updateLabels(); // refresh label if nothing to rebuild
@@ -43545,36 +43643,34 @@ class Scene {
   */
 
 
-  loadScene(config_source, _temp6) {
-    if (config_source === void 0) {
-      config_source = null;
-    }
-
-    let _ref10 = _temp6 === void 0 ? {} : _temp6,
-        base_path = _ref10.base_path,
-        file_type = _ref10.file_type;
-
+  async loadScene(config_source = null, {
+    base_path,
+    file_type
+  } = {}) {
     this.config_source = config_source || this.config_source;
 
     if (typeof this.config_source === 'string') {
-      this.base_path = __chunk_1.pathForURL(base_path || this.config_source);
+      this.base_path = sources.pathForURL(base_path || this.config_source);
     } else {
-      this.base_path = __chunk_1.pathForURL(base_path);
+      this.base_path = sources.pathForURL(base_path);
     } // backwards compatibility for accessing base path under previous name
     // TODO: schedule for deprecation
 
 
     this.config_path = this.base_path;
-    return SceneLoader$1.loadScene(this.config_source, {
+    const {
+      config,
+      bundle,
+      texture_nodes
+    } = await SceneLoader.loadScene(this.config_source, {
       path: this.base_path,
       type: file_type
-    }).then((_ref11) => {
-      let config = _ref11.config,
-          bundle = _ref11.bundle;
-      this.config = config;
-      this.config_bundle = bundle;
-      return this.config;
     });
+    this.config = config;
+    this.config_bundle = bundle;
+    return {
+      texture_nodes
+    }; // pass along texture nodes for resolution after global property subtistution
   } // Add source to a scene, arguments `name` and `config` need to be provided:
   //  - If the name doesn't match a sources it will create it
   //  - the `config` obj follow the YAML scene spec, ex: ```{type: 'TopoJSON', url: "//tile.mapzen.com/mapzen/vector/v1/all/{z}/{x}/{y}.topojson"]}```
@@ -43592,7 +43688,7 @@ class Scene {
 
   setDataSource(name, config) {
     if (!name || !config || !config.type || !config.url && !config.data) {
-      __chunk_1.log('error', 'No name provided or not a valid config:', name, config);
+      sources.log('error', 'No name provided or not a valid config:', name, config);
       return;
     }
 
@@ -43600,7 +43696,7 @@ class Scene {
     let source = this.config.sources[name] = Object.assign({}, config); // Convert raw data into blob URL
 
     if (source.data && typeof source.data === 'object') {
-      source.url = __chunk_1.createObjectURL(new Blob([JSON.stringify(source.data)]));
+      source.url = sources.createObjectURL(new Blob([JSON.stringify(source.data)]));
       delete source.data;
     }
 
@@ -43620,11 +43716,7 @@ class Scene {
   // 2) the data source has changed in a way that affects tile layout (e.g. tile size, max_zoom, etc.)
 
 
-  createDataSources(rebuild_all) {
-    if (rebuild_all === void 0) {
-      rebuild_all = false;
-    }
-
+  createDataSources(rebuild_all = false) {
     const reset = []; // sources to reset
 
     const prev_source_names = Object.keys(this.sources);
@@ -43635,12 +43727,12 @@ class Scene {
       const prev_source = this.sources[name];
 
       try {
-        const config = __chunk_1._extends({}, source, {
+        const config = sources._extends({}, source, {
           name,
           id: source_id++
         });
 
-        this.sources[name] = __chunk_1.DataSource.create(config, this.sources);
+        this.sources[name] = sources.DataSource.create(config, this.sources);
 
         if (!this.sources[name]) {
           throw {};
@@ -43648,7 +43740,7 @@ class Scene {
       } catch (e) {
         delete this.sources[name];
         const message = `Could not create data source: ${e.message}`;
-        __chunk_1.log('warn', `Scene: ${message}`, source);
+        sources.log('warn', `Scene: ${message}`, source);
         this.trigger('warning', {
           type: 'sources',
           source,
@@ -43658,7 +43750,7 @@ class Scene {
       // If so, we'll re-calculate the tiles in view for this source and rebuild them
 
 
-      if (rebuild_all || __chunk_1.DataSource.tileLayoutChanged(this.sources[name], prev_source)) {
+      if (rebuild_all || sources.DataSource.tileLayoutChanged(this.sources[name], prev_source)) {
         reset.push(name);
       }
     } // Sources that were removed
@@ -43690,7 +43782,7 @@ class Scene {
 
 
   loadTextures() {
-    return __chunk_1.Texture.createFromObject(this.gl, this.config.textures).then(() => __chunk_1.Texture.createDefault(this.gl)); // create a 'default' texture for placeholders
+    return sources.Texture.createFromObject(this.gl, this.config.textures).then(() => sources.Texture.createDefault(this.gl)); // create a 'default' texture for placeholders
   } // Free textures from previously loaded scene
 
 
@@ -43701,8 +43793,8 @@ class Scene {
 
     this.prev_textures.forEach(t => {
       // free textures that aren't in the new scene, but are still in the global texture set
-      if (!this.config.textures[t] && __chunk_1.Texture.textures[t]) {
-        __chunk_1.Texture.textures[t].destroy();
+      if (!this.config.textures[t] && sources.Texture.textures[t]) {
+        sources.Texture.textures[t].destroy();
       }
     });
     this.prev_textures = null;
@@ -43745,6 +43837,10 @@ class Scene {
   createLights() {
     this.lights = {};
 
+    if (sources.debugSettings.wireframe) {
+      sources.Light.enabled = false; // disable lighting for wireframe mode
+    }
+
     for (let i in this.config.lights) {
       if (!this.config.lights[i] || typeof this.config.lights[i] !== 'object') {
         continue;
@@ -43756,11 +43852,11 @@ class Scene {
       light.visible = light.visible === false ? false : true;
 
       if (light.visible) {
-        this.lights[light.name] = __chunk_1.Light.create(this.view, light);
+        this.lights[light.name] = sources.Light.create(this.view, light);
       }
     }
 
-    __chunk_1.Light.inject(this.lights);
+    sources.Light.inject(this.lights);
   } // Set background color from scene config
 
 
@@ -43769,18 +43865,18 @@ class Scene {
     this.background = {};
 
     if (bg && bg.color) {
-      this.background.color = __chunk_1.StyleParser.createColorPropertyCache(bg.color);
+      this.background.color = sources.StyleParser.createColorPropertyCache(bg.color);
     }
 
     if (!this.background.color) {
-      this.background.color = __chunk_1.StyleParser.createColorPropertyCache([0, 0, 0, 0]); // default background TODO: vary w/scene alpha
+      this.background.color = sources.StyleParser.createColorPropertyCache([0, 0, 0, 0]); // default background TODO: vary w/scene alpha
     }
   } // Update background color each frame as needed (e.g. may be zoom-interpolated)
 
 
   updateBackground() {
     const last_color = this.background.computed_color;
-    const color = this.background.computed_color = __chunk_1.StyleParser.evalCachedColorProperty(this.background.color, {
+    const color = this.background.computed_color = sources.StyleParser.evalCachedColorProperty(this.background.color, {
       zoom: this.view.tile_zoom
     }); // update GL/canvas if color has changed
 
@@ -43811,34 +43907,25 @@ class Scene {
   // rebuild can be boolean, or an object containing rebuild options to passthrough
 
 
-  updateConfig(_temp7) {
-    let _ref12 = _temp7 === void 0 ? {} : _temp7,
-        _ref12$loading = _ref12.loading,
-        loading = _ref12$loading === void 0 ? false : _ref12$loading,
-        _ref12$rebuild = _ref12.rebuild,
-        rebuild = _ref12$rebuild === void 0 ? true : _ref12$rebuild,
-        serialize_funcs = _ref12.serialize_funcs,
-        _ref12$normalize = _ref12.normalize,
-        normalize = _ref12$normalize === void 0 ? true : _ref12$normalize,
-        _ref12$fade_in = _ref12.fade_in,
-        fade_in = _ref12$fade_in === void 0 ? false : _ref12$fade_in;
-
+  updateConfig({
+    loading = false,
+    rebuild = true,
+    serialize_funcs,
+    texture_nodes = {},
+    normalize = true,
+    fade_in = false
+  } = {}) {
     this.generation = ++Scene.generation;
-    this.updating++;
-    this.config = SceneLoader$1.applyGlobalProperties(this.config);
+    this.updating++; // Apply globals, finalize textures and other resource paths if needed
+
+    this.config = SceneLoader.applyGlobalProperties(this.config);
 
     if (normalize) {
-      // normalize whole scene
-      SceneLoader$1.normalize(this.config, this.config_bundle);
-    } else {
-      // special handling for shader uniforms that are globals
-      SceneLoader$1.hoistStyleShaderUniformTextures(this.config, this.config_bundle, {
-        include_globals: true
-      }); // just normalize top-level textures - necessary for adding base path to globals
-
-      SceneLoader$1.normalizeTextures(this.config, this.config_bundle);
+      // normalize whole scene if requested - usually when user is making run-time updates to scene
+      SceneLoader.normalize(this.config, this.config_bundle, texture_nodes);
     }
 
+    SceneLoader.hoistTextureNodes(this.config, this.config_bundle, texture_nodes);
     this.trigger(loading ? 'load' : 'update', {
       config: this.config
     });
@@ -43848,7 +43935,7 @@ class Scene {
     this.createDataSources(loading);
     this.loadTextures();
     this.setBackground();
-    __chunk_1.FontManager.loadFonts(this.config.fonts); // TODO: detect changes to styles? already (currently) need to recompile anyway when camera or lights change
+    sources.FontManager.loadFonts(this.config.fonts); // TODO: detect changes to styles? already (currently) need to recompile anyway when camera or lights change
 
     this.updateStyles(); // Optionally rebuild geometry
 
@@ -43873,18 +43960,16 @@ class Scene {
   } // Serialize config and send to worker
 
 
-  syncConfigToWorker(_temp8) {
-    let _ref13 = _temp8 === void 0 ? {} : _temp8,
-        _ref13$serialize_func = _ref13.serialize_funcs,
-        serialize_funcs = _ref13$serialize_func === void 0 ? true : _ref13$serialize_func;
-
+  syncConfigToWorker({
+    serialize_funcs = true
+  } = {}) {
     // Tell workers we're about to rebuild (so they can update styles, etc.)
-    let config_serialized = serialize_funcs ? __chunk_1.Utils.serializeWithFunctions(this.config) : JSON.stringify(this.config);
-    return __chunk_1.WorkerBroker.postMessage(this.workers, 'self.updateConfig', {
+    let config_serialized = serialize_funcs ? sources.Utils.serializeWithFunctions(this.config) : JSON.stringify(this.config);
+    return sources.WorkerBroker.postMessage(this.workers, 'self.updateConfig', {
       config: config_serialized,
       generation: this.generation,
       introspection: this.introspection
-    }, __chunk_1.debugSettings);
+    }, sources.debugSettings);
   } // Listen to related objects
 
 
@@ -43900,20 +43985,20 @@ class Scene {
         type: 'textures'
       }, data))
     };
-    __chunk_1.Texture.subscribe(this.listeners.texture);
+    sources.Texture.subscribe(this.listeners.texture);
     this.listeners.scene_loader = {
       error: data => this.trigger('error', Object.assign({
         type: 'scene'
       }, data))
     };
-    SceneLoader$1.subscribe(this.listeners.scene_loader);
+    SceneLoader.subscribe(this.listeners.scene_loader);
   }
 
   destroyListeners() {
     this.unsubscribeAll();
     this.view.unsubscribe(this.listeners.view);
-    __chunk_1.Texture.unsubscribe(this.listeners.texture);
-    SceneLoader$1.unsubscribe(this.listeners.scene_loader);
+    sources.Texture.unsubscribe(this.listeners.texture);
+    SceneLoader.unsubscribe(this.listeners.scene_loader);
     this.listeners = null;
   }
 
@@ -43925,17 +44010,13 @@ class Scene {
   }
 
   resetFeatureSelection() {
-    this.selection = new __chunk_1.FeatureSelection(this.gl, this.workers, () => this.building);
+    this.selection = new sources.FeatureSelection(this.gl, this.workers, () => this.building);
     this.last_render_count = 0; // force re-evaluation of selection map
   }
 
-  resetWorkerFeatureSelection(sources) {
-    if (sources === void 0) {
-      sources = null;
-    }
-
+  resetWorkerFeatureSelection(sources$1 = null) {
     if (this.workers) {
-      __chunk_1.WorkerBroker.postMessage(this.workers, 'self.resetFeatureSelection', sources);
+      sources.WorkerBroker.postMessage(this.workers, 'self.resetFeatureSelection', sources$1);
     }
   } // Gets the current feature selection map size across all workers. Returns a promise.
 
@@ -43943,7 +44024,7 @@ class Scene {
   getFeatureSelectionMapSize() {
     // Only allow one fetch process to run at a time
     if (this.fetching_selection_map == null) {
-      this.fetching_selection_map = __chunk_1.WorkerBroker.postMessage(this.workers, 'self.getFeatureSelectionMapSize').then(sizes => {
+      this.fetching_selection_map = sources.WorkerBroker.postMessage(this.workers, 'self.getFeatureSelectionMapSize').then(sizes => {
         this.fetching_selection_map = null;
         return sizes.reduce((a, b) => a + b);
       });
@@ -43976,11 +44057,9 @@ class Scene {
   // Returns a promise
 
 
-  screenshot(_temp9) {
-    let _ref14 = _temp9 === void 0 ? {} : _temp9,
-        _ref14$background = _ref14.background,
-        background = _ref14$background === void 0 ? 'white' : _ref14$background;
-
+  screenshot({
+    background = 'white'
+  } = {}) {
     this.requestRedraw();
     return this.media_capture.screenshot({
       background
@@ -44000,7 +44079,7 @@ class Scene {
   logFirstFrame() {
     if (this.last_render_count === 0 && !this.times.first_frame) {
       this.times.first_frame = +new Date() - this.start_time;
-      __chunk_1.log('debug', `Scene: initial frame time: ${this.times.first_frame}`);
+      sources.log('debug', `Scene: initial frame time: ${this.times.first_frame}`);
     }
   } // Log completion of first scene build
 
@@ -44008,7 +44087,7 @@ class Scene {
   logFirstBuild() {
     if (this.times.first_build == null) {
       this.times.first_build = +new Date() - this.start_time;
-      __chunk_1.log('debug', `Scene: initial build time: ${this.times.first_build}`);
+      sources.log('debug', `Scene: initial build time: ${this.times.first_build}`);
     }
   }
 
@@ -44054,7 +44133,7 @@ function extendLeaflet(options) {
   } // Leaflet layer functionality is only defined in main thread
 
 
-  if (__chunk_1.Thread.is_main) {
+  if (sources.Thread.is_main) {
     let L = options.leaflet || window.L; // Determine if we are extending the leaflet 0.7.x TileLayer class, or the newer
     // leaflet 1.x GridLayer class.
 
@@ -44133,7 +44212,7 @@ function extendLeaflet(options) {
           this._updating_tangram = true;
           this.scene.view.setPanning(true);
           var view = map.getCenter();
-          view.zoom = Math.max(Math.min(map.getZoom(), map.getMaxZoom() || __chunk_1.Geo.default_view_max_zoom), map.getMinZoom());
+          view.zoom = Math.max(Math.min(map.getZoom(), map.getMaxZoom() || sources.Geo.default_view_max_zoom), map.getMinZoom());
           this.scene.view.setView(view);
 
           if (this._mapLayerCount > 1) {
@@ -44193,6 +44272,14 @@ function extendLeaflet(options) {
           file_type: this.options.sceneFileType,
           blocking: false
         }).then(() => {
+          if (!this.options.attribution) {
+            for (const [, value] of Object.entries(this.scene.config.sources)) {
+              if (value.attribution) {
+                map.attributionControl.addAttribution(value.attribution);
+              }
+            }
+          }
+
           this._updating_tangram = true;
           this.updateSize();
           this.updateView();
@@ -44435,7 +44522,7 @@ function extendLeaflet(options) {
       updateView() {
         var view = this._map.getCenter();
 
-        view.zoom = Math.max(Math.min(this._map.getZoom(), this._map.getMaxZoom() || __chunk_1.Geo.default_view_max_zoom), this._map.getMinZoom());
+        view.zoom = Math.max(Math.min(this._map.getZoom(), this._map.getMaxZoom() || sources.Geo.default_view_max_zoom), this._map.getMinZoom());
         this.scene.view.setView(view);
       },
 
@@ -44554,10 +44641,9 @@ function extendLeaflet(options) {
       // Set user-defined handlers for feature selection events
       // Currently only one handler can be defined for each event type
       // Event types are: `click`, `hover` (leaflet `mousemove`)
-      setSelectionEvents(events, _temp) {
-        let _ref = _temp === void 0 ? {} : _temp,
-            radius = _ref.radius;
-
+      setSelectionEvents(events, {
+        radius
+      } = {}) {
         this._selection_events = Object.assign(this._selection_events, events);
         this._selection_radius = radius !== undefined ? radius : this._selection_radius;
       },
@@ -44580,12 +44666,12 @@ function extendLeaflet(options) {
       },
 
       updateTangramDebugSettings() {
-        __chunk_1.mergeDebugSettings(this.options.debug || {});
+        sources.mergeDebugSettings(this.options.debug || {});
       }
 
     }); // Modified version of Leaflet's setZoomAround that doesn't trigger a moveEnd event
 
-    setZoomAroundNoMoveEnd = function setZoomAroundNoMoveEnd(layer, latlng, zoom) {
+    setZoomAroundNoMoveEnd = function (layer, latlng, zoom) {
       var map = layer._map,
           scene = layer.scene,
           scale = map.getZoomScale(zoom),
@@ -44625,33 +44711,33 @@ function extendLeaflet(options) {
 /*jshint worker: true*/
 
 const debug$1 = {
-  log: __chunk_1.log,
+  log: sources.log,
   yaml: jsYaml$1,
-  Utils: __chunk_1.Utils,
-  Geo: __chunk_1.Geo,
-  Vector: __chunk_1.Vector,
-  DataSource: __chunk_1.DataSource,
-  GLSL: __chunk_1.GLSL,
-  ShaderProgram: __chunk_1.ShaderProgram,
-  VertexData: __chunk_1.VertexData,
-  Texture: __chunk_1.Texture,
-  Material: __chunk_1.Material,
-  Light: __chunk_1.Light,
+  Utils: sources.Utils,
+  Geo: sources.Geo,
+  Vector: sources.Vector,
+  DataSource: sources.DataSource,
+  GLSL: sources.GLSL,
+  ShaderProgram: sources.ShaderProgram,
+  VertexData: sources.VertexData,
+  Texture: sources.Texture,
+  Material: sources.Material,
+  Light: sources.Light,
   Scene,
-  WorkerBroker: __chunk_1.WorkerBroker,
-  Task: __chunk_1.Task,
-  StyleManager: __chunk_1.StyleManager,
-  StyleParser: __chunk_1.StyleParser,
-  TileID: __chunk_1.TileID,
-  Collision: __chunk_1.Collision,
-  FeatureSelection: __chunk_1.FeatureSelection,
-  TextCanvas: __chunk_1.TextCanvas,
-  debugSettings: __chunk_1.debugSettings
+  WorkerBroker: sources.WorkerBroker,
+  Task: sources.Task,
+  StyleManager: sources.StyleManager,
+  StyleParser: sources.StyleParser,
+  TileID: sources.TileID,
+  Collision: sources.Collision,
+  FeatureSelection: sources.FeatureSelection,
+  TextCanvas: sources.TextCanvas,
+  debugSettings: sources.debugSettings
 };
 var index = {
   leafletLayer,
   debug: debug$1,
-  version: __chunk_1.version
+  version: sources.version
 };
 
 return index;
@@ -44664,7 +44750,7 @@ return index;
 // Script modules can't expose exports
 try {
 	Tangram.debug.ESM = true; // mark build as ES module
-	Tangram.debug.SHA = 'f5fd3b6250b23ac8f4a7cec0292252d37e93b7f1';
+	Tangram.debug.SHA = '81ee5a1ddf14547d5653c42972e0a66fa999d545';
 	if (true === true && typeof window === 'object') {
 	    window.Tangram = Tangram;
 	}

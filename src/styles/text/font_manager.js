@@ -1,4 +1,3 @@
-/* global FontFace */
 import log from '../../utils/log';
 import Utils from '../../utils/utils';
 import FontFaceObserver from 'fontfaceobserver';
@@ -56,6 +55,12 @@ const FontManager = {
 
         // Wait for font to load
         try {
+            // FontFaceObserver does not directly support variable fonts syntax, which allows for ranges,
+            // e.g. `font-weight: 100 800`. FontFaceObserver will insert the entire string value into a
+            // CSS `font` shorthand property, causing an error. To get around this, we simply take the first
+            // value, because as soon as one variant of the variable font is available, they all should be.
+            // See https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Fonts/Variable_Fonts_Guide
+            options.weight = typeof options.weight === 'string' ? options.weight.split(' ')[0] : options.weight;
             const observer = new FontFaceObserver(family, options);
             await observer.load();
             // Promise resolves, font is available
@@ -63,7 +68,7 @@ const FontManager = {
         }
         catch (e) {
             // Promise rejects, font is not available
-            log('debug', `Font face '${family}' is NOT available`, options);
+            log('warn', `Font face '${family}' is NOT available`, options, e);
         }
     },
 
@@ -87,7 +92,7 @@ const FontManager = {
         // Also see https://github.com/bramstein/fontloader/blob/598e9399117bdc946ff786fa2c5007a6bd7d3b9e/src/fontface.js#L145-L153
         let data = url;
         if (url.slice(0, 5) === 'blob:') {
-            data = await Utils.io(url, 60000, 'arraybuffer');
+            data = (await Utils.io(url, 60000, 'arraybuffer')).body;
             let bytes = new Uint8Array(data);
             if (this.supports_native_font_loading) {
                 data = bytes; // use raw binary data

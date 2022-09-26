@@ -55,12 +55,16 @@ Utils.io = function (url, timeout = 60000, responseType = 'text', method = 'GET'
             request.onload = () => {
                 if (request.status === 200) {
                     if (['text', 'json'].indexOf(request.responseType) > -1) {
-                        resolve(request.responseText);
+                        resolve({ body: request.responseText, status: request.status });
                     }
                     else {
-                        resolve(request.response);
+                        resolve({ body: request.response, status: request.status });
                     }
-                } else {
+                }
+                else if (request.status === 204) { // No Content
+                    resolve({ body: null, status: request.status });
+                }
+                else {
                     reject(Error('Request error with a status of ' + request.statusText));
                 }
             };
@@ -230,9 +234,11 @@ Utils.interpolate = function(x, points, transform) {
 };
 
 Utils.toCSSColor = function (color) {
-    if (color[3] === 1) { // full opacity
-        return `rgb(${color.slice(0, 3).map(c => Math.round(c * 255)).join(', ')})`;
+    if (color != null) {
+        if (color[3] === 1) { // full opacity
+            return `rgb(${color.slice(0, 3).map(c => Math.round(c * 255)).join(', ')})`;
+        }
+        // RGB is between [0, 255] opacity is between [0, 1]
+        return `rgba(${color.map((c, i) => (i < 3 && Math.round(c * 255)) || c).join(', ')})`;
     }
-    // RGB is between [0, 255] opacity is between [0, 1]
-    return `rgba(${color.map((c, i) => (i < 3 && Math.round(c * 255)) || c).join(', ')})`;
 };

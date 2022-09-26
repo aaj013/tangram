@@ -1,5 +1,6 @@
 import Utils from '../utils/utils';
 import * as URLs from '../utils/urls';
+import { isGlobalReference } from './globals';
 
 import JSZip from 'jszip';
 import yaml from 'js-yaml';
@@ -52,7 +53,7 @@ export class SceneBundle {
     }
 
     urlFor(url) {
-        if (isGlobal(url)) {
+        if (isGlobalReference(url)) {
             return url;
         }
 
@@ -94,8 +95,8 @@ export class ZipSceneBundle extends SceneBundle {
         this.zip = new JSZip();
 
         if (typeof this.url === 'string') {
-            const data = await Utils.io(this.url, 60000, 'arraybuffer');
-            await this.zip.loadAsync(data);
+            const { body } = await Utils.io(this.url, 60000, 'arraybuffer');
+            await this.zip.loadAsync(body);
             await this.parseZipFiles();
             return this.loadRoot();
         } else {
@@ -104,7 +105,7 @@ export class ZipSceneBundle extends SceneBundle {
     }
 
     urlFor(url) {
-        if (isGlobal(url)) {
+        if (isGlobalReference(url)) {
             return url;
         }
 
@@ -196,35 +197,20 @@ export function createSceneBundle(url, path, parent, type = null) {
     return new SceneBundle(url, path, parent);
 }
 
-// References a global property?
-export function isGlobal (val) {
-    if (val && val.slice(0, 7) === 'global.') {
-        return true;
-    }
-    return false;
-}
-
 function parseResource (body) {
-    var data;
-    try {
-        // jsyaml 'json' option allows duplicate keys
-        // Keeping this for backwards compatibility, but should consider migrating to requiring
-        // unique keys, as this is YAML spec. But Tangram ES currently accepts dupe keys as well,
-        // so should consider how best to unify.
-        data = yaml.safeLoad(body, { json: true });
-    } catch (e) {
-        throw e;
-    }
-    return data;
+    // jsyaml 'json' option allows duplicate keys
+    // Keeping this for backwards compatibility, but should consider migrating to requiring
+    // unique keys, as this is YAML spec. But Tangram ES currently accepts dupe keys as well,
+    // so should consider how best to unify.
+    return yaml.safeLoad(body, { json: true });
 }
 
 function loadResource (source) {
     return new Promise((resolve, reject) => {
         if (typeof source === 'string') {
-            Utils.io(source).then((body) => {
+            Utils.io(source).then(({ body }) => {
                 try {
-                    let data = parseResource(body);
-                    resolve(data);
+                    resolve(parseResource(body));
                 }
                 catch(e) {
                     reject(e);
